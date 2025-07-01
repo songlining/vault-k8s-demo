@@ -1,6 +1,6 @@
 # Purpose
 
-This document is to demonstrate how alias_name_source=serviceaccount_name changes the behavior of entity and alias mapping.
+This document is to demonstrate how /alias_name_source=serviceaccount_name/ changes the behavior of entity and alias mapping.
 
 ## default entity and entity alias setting, for the record before the change
 ```kubectl exec -it vault-0 -- vault read -format=json /identity/entity/id/531f36c3-de7b-2023-c694-0076a68944b6
