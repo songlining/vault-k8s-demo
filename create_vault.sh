@@ -1,3 +1,4 @@
+# inspired by https://www.youtube.com/watch?v=HHZO4_-GRYs
 
 helm install vault hashicorp/vault \
   --create-namespace \
