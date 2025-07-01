@@ -48,6 +48,8 @@ This document is to demonstrate how ***alias_name_source=serviceaccount_name*** 
   "mount_type": "identity"
 }```
 
+and ---
+
 ```kubectl exec -it vault-0 -- vault read -format=json identity/entity-alias/id/60d3c7c2-c2ce-0d33-c474-6647e109123b
 
 {
@@ -80,8 +82,6 @@ This document is to demonstrate how ***alias_name_source=serviceaccount_name*** 
 }```
 
 ## after the change (added alias_name_source=serviceaccount_name)
-
-
 
 ```kubectl exec -it "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/vault-demo \
     alias_name_source=serviceaccount_name \
