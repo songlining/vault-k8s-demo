@@ -23,12 +23,12 @@ while : ; do
 done
 echo "Vault pod $POD is Initialized."
 
-NAMESPACE="default"
-sleep 15
+# sleep 15
 POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault \
       -o jsonpath='{.items[0].metadata.name}')
 
-
+echo "Wait for another 20 secs for things to be settled ..."
+sleep 20
 
 kubectl exec -i "$POD" -n "$NAMESPACE" -- sh <<'EOF'
 # Step 1: Initialize Vault and capture output
