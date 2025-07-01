@@ -23,7 +23,6 @@ while : ; do
 done
 echo "Vault pod $POD is Initialized."
 
-# sleep 15
 POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault \
       -o jsonpath='{.items[0].metadata.name}')
 
@@ -98,6 +97,7 @@ path "kv-v2/data/vault-demo/mysecret" {
 EOF
 
 kubectl exec -it "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/vault-demo \
+    alias_name_source=serviceaccount_name \
     bound_service_account_names=default \
     bound_service_account_namespaces=default \
     policies=default,mysecret \
