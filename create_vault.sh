@@ -1,16 +1,35 @@
-# kubectl  delete namespace vault
-helm install vault hashicorp/vault \
-  --namespace vault \
-  --create-namespace \
-  --set "injector.enabled=true"
 
-NAMESPACE="vault"
+helm install vault hashicorp/vault \
+  --create-namespace \
+  --set "injector.enabled=true" \
+  --set='server.auditStorage.enabled=true' \
+  --set='server.auditStorage.size=1Gi' \
+  --set='server.auditStorage.type=file'
+
+# Wait for Vault pod to be ready
+NAMESPACE="default"
+echo "Waiting for Vault pod to be ready..."
+while : ; do
+  POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -n "$POD" ]; then
+    READY_STATUS=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Initialized")].status}')
+    if [ "$READY_STATUS" = "True" ]; then
+      break
+    fi
+  fi
+  sleep 5
+  echo "Still waiting for Vault pod to be ready..."
+done
+echo "Vault pod $POD is Initialized."
+
+NAMESPACE="default"
+sleep 15
 POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault \
       -o jsonpath='{.items[0].metadata.name}')
 
-sleep 10
 
-kubectl exec -it "$POD" -n "$NAMESPACE" -- sh <<'EOF'
+
+kubectl exec -i "$POD" -n "$NAMESPACE" -- sh <<'EOF'
 # Step 1: Initialize Vault and capture output
 VAULT_INIT_OUTPUT=$(vault operator init -key-shares=5 -key-threshold=3)
 
@@ -47,15 +66,9 @@ echo "$VAULT_INIT_OUTPUT" | awk '{
 }
 
 echo "Vault initialized, unsealed, logged in and ready for use"
-
 EOF
 
-kubectl exec -it "$POD" -n "$NAMESPACE" -- vault auth enable kubernetes
-kubectl exec -it "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/vault-demo \
-    bound_service_account_names=default \
-    bound_service_account_namespaces=vault \
-    policies=default,mysecret \
-    ttl=1h
+kubectl exec -ti "$POD" -n "$NAMESPACE" -- vault audit enable file file_path=stdout
 
 kubectl apply -f - <<'EOF'
 apiVersion: rbac.authorization.k8s.io/v1
@@ -69,8 +82,28 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: default
-  namespace: vault
+  namespace: default
 EOF
+
+sleep 5
+
+kubectl exec -it "$POD" -n "$NAMESPACE" -- vault auth enable kubernetes
+kubectl exec -it "$POD" -n "$NAMESPACE" -- vault secrets enable -path=kv-v2 kv-v2
+kubectl exec -it "$POD" -n "$NAMESPACE" -- vault kv put kv-v2/vault-demo/mysecret username=larry
+kubectl exec -it "$POD" -n "$NAMESPACE" -- vault policy write mysecret - <<EOF
+path "kv-v2/data/vault-demo/mysecret" {
+  capabilities = ["read"]
+}
+EOF
+
+kubectl exec -it "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/vault-demo \
+    bound_service_account_names=default \
+    bound_service_account_namespaces=default \
+    policies=default,mysecret \
+    ttl=1h
+
+kubectl exec -it "$POD" -n "$NAMESPACE" -- sh -c 'vault write auth/kubernetes/config \
+  kubernetes_host=https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT'
 
 kubectl apply -f - <<'EOF'
 # vault-demo.yaml
@@ -79,6 +112,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: vault-demo
+  namespace: default
   annotations:
     vault.hashicorp.com/agent-inject: "true"
     vault.hashicorp.com/role: "vault-demo"
@@ -92,7 +126,7 @@ spec:
       resources: {}
       args:
       - |
-        VAULT_ADDR="http://vault-internal.vault:8200"
+        VAULT_ADDR="http://vault-internal:8200"
         SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
         VAULT_RESPONSE=$(curl -X POST -H "X-Vault-Request: true" -d '{"jwt": "'"$SA_TOKEN"'", "role": "vault-demo"}' \
           $VAULT_ADDR/v1/auth/kubernetes/login | jq .)
