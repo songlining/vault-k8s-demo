@@ -3,7 +3,7 @@
 This document is to demonstrate how alias_name_source=serviceaccount_name changes the behavior of entity and alias mapping.
 
 ## default entity and entity alias setting, for the record before the change
-`kubectl exec -it vault-0 -- vault read -format=json /identity/entity/id/531f36c3-de7b-2023-c694-0076a68944b6
+```kubectl exec -it vault-0 -- vault read -format=json /identity/entity/id/531f36c3-de7b-2023-c694-0076a68944b6
 {
   "request_id": "6f6e4c8b-021a-b8d9-ba70-9442ffa85c72",
   "lease_id": "",
@@ -46,9 +46,9 @@ This document is to demonstrate how alias_name_source=serviceaccount_name change
   },
   "warnings": null,
   "mount_type": "identity"
-}`
+}```
 
-`kubectl exec -it vault-0 -- vault read -format=json identity/entity-alias/id/60d3c7c2-c2ce-0d33-c474-6647e109123b
+```kubectl exec -it vault-0 -- vault read -format=json identity/entity-alias/id/60d3c7c2-c2ce-0d33-c474-6647e109123b
 
 {
   "request_id": "6ef2479d-5d4a-95cd-aaf8-d2ca47f64c7a",
@@ -77,13 +77,13 @@ This document is to demonstrate how alias_name_source=serviceaccount_name change
   },
   "warnings": null,
   "mount_type": "identity"
-}`
+}```
 
 ## after the change (added alias_name_source=serviceaccount_name)
 
 
 
-`kubectl exec -it "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/vault-demo \
+```kubectl exec -it "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/vault-demo \
     alias_name_source=serviceaccount_name \
     bound_service_account_names=default \
     bound_service_account_namespaces=default \
@@ -133,22 +133,22 @@ kubectl exec -it vault-0 -- vault read -format=json /identity/entity/id/ceb48de1
   },
   "warnings": null,
   "mount_type": "identity"
-}`
+}```
 
 Notice the name above is now "default/default", intead of the uid in the previous secsion.
 
 ## test the deletion of the service account on k8s
 ### make sure we record the current value
-`kubectl get serviceaccount default -n default -o jsonpath='{.metadata.uid}'
-c24c6f43-07c3-4c20-8665-3c24a484ace8%`
+```kubectl get serviceaccount default -n default -o jsonpath='{.metadata.uid}'
+c24c6f43-07c3-4c20-8665-3c24a484ace8%```
 
 ### delete the service account
-`kubectl delete serviceaccount default -n default
+```kubectl delete serviceaccount default -n default
 kubectl get serviceaccount default -n default -o jsonpath='{.metadata.uid}'
-cf60e7c7-6738-40d7-8bc5-61577c8e8ca1%`
+cf60e7c7-6738-40d7-8bc5-61577c8e8ca1%```
 
 ### now delete the pod and recreate
-`kubectl delete pod vault-demo
+```kubectl delete pod vault-demo
 kubectl apply -f - <<'EOF'
 
 apiVersion: v1
@@ -186,14 +186,14 @@ spec:
 
         sleep infinity
 EOF
-`
+```
 ### check the alias and entity again
 We can confirm the entity and alias remain the same.
 
 ## testing with uid as the alias_name_source (default setting)
 Not going to put the process details here but here are two entities and two aliases caused by the deletion (and auto restore) of the service account.  I have also deleted the pod and restarted it so that the sidecar will re-authenticate to Vault.
 
-`kubectl exec -it vault-0 -- vault list /identity/entity-alias/id
+```kubectl exec -it vault-0 -- vault list /identity/entity-alias/id
 Keys
 ----
 13e474db-c3b0-747c-075d-6f21f59f64e5
@@ -202,10 +202,10 @@ Keys
 Keys
 ----
 0334a5c1-7b87-ff9c-4f00-aa6da7e8e1ab
-59f44dca-8d49-e5be-2f34-b493bbd3a88a`
+59f44dca-8d49-e5be-2f34-b493bbd3a88a```
 
 Let's read the two entities:
-`kubectl exec -it vault-0 -- vault read -format=json /identity/entity/id/0334a5c1-7b87-ff9c-4f00-aa6da7e8e1ab
+```kubectl exec -it vault-0 -- vault read -format=json /identity/entity/id/0334a5c1-7b87-ff9c-4f00-aa6da7e8e1ab
 {
   "request_id": "80af32fb-220d-9501-e5b5-1b617248d1d0",
   "lease_id": "",
@@ -293,7 +293,7 @@ kubectl exec -it vault-0 -- vault read -format=json /identity/entity/id/59f44dca
   },
   "warnings": null,
   "mount_type": "identity"
-`
+```
 Notice the name above still uses uid as the alias_name_source.
 
 
