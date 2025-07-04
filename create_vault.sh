@@ -11,7 +11,7 @@ helm install vault hashicorp/vault \
 NAMESPACE="default"
 echo "Waiting for Vault pod to be ready..."
 while : ; do
-  POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)z
   if [ -n "$POD" ]; then
     READY_STATUS=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Initialized")].status}')
     if [ "$READY_STATUS" = "True" ]; then
@@ -63,6 +63,8 @@ echo "$VAULT_INIT_OUTPUT" | awk '{
 
     # Step 4: Login with root token
     vault login "$root_token"
+    # store root_token to a file so it can be found later
+    echo "$root_token" > /vault/config/root_token
 }
 
 echo "Vault initialized, unsealed, logged in and ready for use"
