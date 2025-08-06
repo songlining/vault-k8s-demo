@@ -2,7 +2,7 @@
 
 This repository contains a script to demonstrate HashiCorp Vault integration with Kubernetes.
 
-## What the Script Does
+## What the Script (create_vault.sh) Does
 
 Running the script against an existing k8s cluster, it will -
 1. Install vault server into "default" namespace using Helm with audit storage enabled

@@ -11,7 +11,7 @@ helm install vault hashicorp/vault \
 NAMESPACE="default"
 echo "Waiting for Vault pod to be ready..."
 while : ; do
-  POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)z
+  POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
   if [ -n "$POD" ]; then
     READY_STATUS=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Initialized")].status}')
     if [ "$READY_STATUS" = "True" ]; then
