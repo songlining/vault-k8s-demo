@@ -98,6 +98,23 @@ path "kv-v2/data/vault-demo/mysecret" {
 }
 EOF
 
+# 1. Authentication Request
+#    ↓
+# 2. JWT Validation (K8s TokenReview API)
+#    ↓
+# 3. Role Matching (vault-demo)
+#    ↓
+# 4. Entity/EntityAlias Management:
+#    • Check if EntityAlias exists for "default/default"
+#    • If not: Create Entity + EntityAlias
+#    • If yes: Use existing Entity
+#    ↓
+# 5. Token Creation:
+#    • Apply policies from role (default,mysecret)
+#    • Link token to Entity
+#    • Set TTL (1h)
+#    ↓
+# 6. Return token + entity info
 kubectl exec -it "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/vault-demo \
     alias_name_source=serviceaccount_name \
     bound_service_account_names=default \

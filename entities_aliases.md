@@ -311,6 +311,85 @@ kubectl exec -it vault-0 -- vault read -format=json /identity/entity/id/59f44dca
 ```
 Notice the name above still uses uid as the alias_name_source.
 
+## Another sample output (Entity and its Entity Alias)
+```json
 
+kubectl exec -it vault-0 -- vault read -format=json identity/entity/id/071f5219-ba3a-d2c0-adb4-c107549ac3a7              
 
+{
+  "request_id": "b118d781-91de-e6b4-f2c6-beac144acfac",
+  "lease_id": "",
+  "lease_duration": 0,
+  "renewable": false,
+  "data": {
+    "aliases": [
+      {
+        "canonical_id": "071f5219-ba3a-d2c0-adb4-c107549ac3a7",
+        "creation_time": "2025-08-06T05:51:21.492167588Z",
+        "custom_metadata": null,
+        "id": "4b1f8433-6e3e-6474-8a48-d7f0b1ff136b",
+        "last_update_time": "2025-08-06T05:51:21.492167588Z",
+        "local": false,
+        "merged_from_canonical_ids": null,
+        "metadata": {
+          "service_account_name": "default",
+          "service_account_namespace": "default",
+          "service_account_secret_name": "",
+          "service_account_uid": "fc706976-1276-4613-9497-2d6695830543"
+        },
+        "mount_accessor": "auth_kubernetes_2f9edf24",
+        "mount_path": "auth/kubernetes/",
+        "mount_type": "kubernetes",
+        "name": "default/default"
+      }
+    ],
+    "creation_time": "2025-08-06T05:51:21.492163088Z",
+    "direct_group_ids": [],
+    "disabled": false,
+    "group_ids": [],
+    "id": "071f5219-ba3a-d2c0-adb4-c107549ac3a7",
+    "inherited_group_ids": [],
+    "last_update_time": "2025-08-06T05:51:21.492163088Z",
+    "merged_entity_ids": null,
+    "metadata": null,
+    "name": "entity_cd038ea6",
+    "namespace_id": "root",
+    "policies": []
+  },
+  "warnings": null,
+  "mount_type": "identity"
+}
+
+kubectl exec -it vault-0 -- vault read -format=json identity/entity-alias/id/4b1f8433-6e3e-6474-8a48-d7f0b1ff136b                                               
+kubectl exec -it vault-0 -- vault read -format=json identity/entity-alias/id/4b1f8433-6e3e-6474-8a48-d7f0b1ff136b
+{
+  "request_id": "7f460c21-e4de-077c-71dd-3c61e33e1fb7",
+  "lease_id": "",
+  "lease_duration": 0,
+  "renewable": false,
+  "data": {
+    "canonical_id": "071f5219-ba3a-d2c0-adb4-c107549ac3a7",
+    "creation_time": "2025-08-06T05:51:21.492167588Z",
+    "custom_metadata": null,
+    "id": "4b1f8433-6e3e-6474-8a48-d7f0b1ff136b",
+    "last_update_time": "2025-08-06T05:51:21.492167588Z",
+    "local": false,
+    "merged_from_canonical_ids": null,
+    "metadata": {
+      "service_account_name": "default",
+      "service_account_namespace": "default",
+      "service_account_secret_name": "",
+      "service_account_uid": "fc706976-1276-4613-9497-2d6695830543"
+    },
+    "mount_accessor": "auth_kubernetes_2f9edf24",
+    "mount_path": "auth/kubernetes/",
+    "mount_type": "kubernetes",
+    "name": "default/default",
+    "namespace_id": "root"
+  },
+  "warnings": null,
+  "mount_type": "identity"
+}
+
+```
 
