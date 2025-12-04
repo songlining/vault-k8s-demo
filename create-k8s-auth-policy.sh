@@ -6,22 +6,24 @@ set -e
 NAMESPACE="default"
 POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault -o jsonpath='{.items[0].metadata.name}')
 
+echo "POD name: $POD"
+
 echo "=========================================="
 echo "Vault Kubernetes Auth Demo - Clean Start"
 echo "=========================================="
 echo ""
 
-# Step 1: Clean up any existing test auth methods
-echo "[Step 1] Cleaning up previous test auth methods..."
+# Step 1: Clean up any existing kubernetes auth methods (including default)
+echo "[Step 1] Cleaning up ALL previous Kubernetes auth methods..."
 echo ""
 
-# Get list of all kubernetes-* auth methods (excluding the main 'kubernetes/' if it exists)
-TEST_AUTH_METHODS=$(kubectl exec "$POD" -n "$NAMESPACE" -- vault auth list -format=json | \
-  jq -r 'to_entries | .[] | select(.key | startswith("kubernetes-")) | .key' || echo "")
+# Get list of ALL kubernetes auth methods (including the default 'kubernetes/')
+ALL_K8S_AUTH_METHODS=$(kubectl exec "$POD" -n "$NAMESPACE" -- vault auth list -format=json | \
+  jq -r 'to_entries | .[] | select(.key | startswith("kubernetes")) | .key' || echo "")
 
-if [ -n "$TEST_AUTH_METHODS" ]; then
-  echo "Found existing test auth methods to clean up:"
-  echo "$TEST_AUTH_METHODS"
+if [ -n "$ALL_K8S_AUTH_METHODS" ]; then
+  echo "Found existing Kubernetes auth methods to clean up:"
+  echo "$ALL_K8S_AUTH_METHODS"
   echo ""
 
   while IFS= read -r auth_path; do
@@ -30,38 +32,19 @@ if [ -n "$TEST_AUTH_METHODS" ]; then
       kubectl exec "$POD" -n "$NAMESPACE" -- vault auth disable "$auth_path" 2>/dev/null || \
         echo "    Warning: Could not disable $auth_path (may not exist or no permission)"
     fi
-  done <<< "$TEST_AUTH_METHODS"
+  done <<< "$ALL_K8S_AUTH_METHODS"
   echo ""
-  echo "✓ Cleanup completed"
+  echo "✓ Cleanup completed - All Kubernetes auth methods removed"
 else
-  echo "✓ No existing test auth methods found - starting clean"
+  echo "✓ No existing Kubernetes auth methods found - starting clean"
 fi
 
 echo ""
 echo "[Step 2] Creating least privilege policy for Kubernetes auth method management..."
 echo ""
 
-# Create the policy
-cat <<'EOF' | kubectl exec -i "$POD" -n "$NAMESPACE" -- vault policy write k8s-auth-manager -
-# Policy: k8s-auth-manager
-# Purpose: Allow creation and management of Kubernetes auth methods with least privilege
-
-# Enable/disable Kubernetes auth methods at paths matching 'kubernetes-*'
-path "sys/auth/kubernetes-*" {
-  capabilities = ["create", "update", "read", "delete", "sudo"]
-}
-
-# Full access to configure and manage ALL Kubernetes auth methods
-# This includes: config, roles, and all sub-paths
-path "auth/kubernetes*" {
-  capabilities = ["create", "update", "read", "delete", "list"]
-}
-
-# Read-only access to list all auth methods (for verification)
-path "sys/auth" {
-  capabilities = ["read"]
-}
-EOF
+# Create the policy from file
+cat k8s-auth-manager-policy.hcl | kubectl exec -i "$POD" -n "$NAMESPACE" -- vault policy write k8s-auth-manager -
 
 echo "✓ Policy 'k8s-auth-manager' created successfully!"
 echo ""
@@ -97,36 +80,57 @@ echo '1. Testing: List auth methods (should work - read only)'
 kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault auth list && echo '✓ SUCCESS'
 
 echo ''
-echo '2. Testing: Enable new Kubernetes auth at kubernetes-test path (should work)'
-kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault auth enable -path=kubernetes-test kubernetes && echo '✓ SUCCESS'
+echo '2. Testing: Enable new Kubernetes auth at kubernetes-dev path (should work)'
+kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault auth enable -path=kubernetes-dev kubernetes && echo '✓ SUCCESS'
 
 echo ''
-echo '3. Testing: Configure the auth method (should work)'
+echo '3. Testing: Enable new Kubernetes auth at kubernetes-prod path (should work)'
+kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault auth enable -path=kubernetes-prod kubernetes && echo '✓ SUCCESS'
+
+echo ''
+echo '4. Testing: Enable new Kubernetes auth at kubernetes-staging path (should work)'
+kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault auth enable -path=kubernetes-staging kubernetes && echo '✓ SUCCESS'
+
+echo ''
+echo '5. Testing: Configure the kubernetes-dev auth method (should work)'
 kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" /bin/sh -c \
-  'vault write auth/kubernetes-test/config kubernetes_host=https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT' && echo '✓ SUCCESS'
+  'vault write auth/kubernetes-dev/config kubernetes_host=https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT' && echo '✓ SUCCESS'
 
 echo ''
-echo '4. Testing: Create a role (should work)'
-kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault write auth/kubernetes-test/role/test-role \
+echo '6. Testing: Configure the kubernetes-prod auth method (should work)'
+kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" /bin/sh -c \
+  'vault write auth/kubernetes-prod/config kubernetes_host=https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT' && echo '✓ SUCCESS'
+
+echo ''
+echo '7. Testing: Create a role in kubernetes-dev (should work)'
+kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault write auth/kubernetes-dev/role/dev-role \
   bound_service_account_names=default \
   bound_service_account_namespaces=default \
   policies=default \
   ttl=1h && echo '✓ SUCCESS'
 
 echo ''
-echo '5. Testing: List roles (should work)'
-kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault list auth/kubernetes-test/role && echo '✓ SUCCESS'
+echo '8. Testing: Create a role in kubernetes-prod (should work)'
+kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault write auth/kubernetes-prod/role/prod-role \
+  bound_service_account_names=default \
+  bound_service_account_namespaces=default \
+  policies=default \
+  ttl=1h && echo '✓ SUCCESS'
 
 echo ''
-echo '6. Testing: Read role (should work)'
-kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault read auth/kubernetes-test/role/test-role && echo '✓ SUCCESS'
+echo '9. Testing: List roles in kubernetes-dev (should work)'
+kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault list auth/kubernetes-dev/role && echo '✓ SUCCESS'
 
 echo ''
-echo '7. Testing: Attempting to read a secret (should FAIL - not in policy)'
+echo '10. Testing: Read role from kubernetes-prod (should work)'
+kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault read auth/kubernetes-prod/role/prod-role && echo '✓ SUCCESS'
+
+echo ''
+echo '11. Testing: Attempting to read a secret (should FAIL - not in policy)'
 kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault kv get kv-v2/vault-demo/mysecret 2>&1 || echo '✓ CORRECTLY DENIED'
 
 echo ''
-echo '8. Testing: List all auth methods to show kubernetes-test was created'
+echo '12. Testing: List all auth methods to show all created Kubernetes auth methods'
 kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault auth list | grep -E "(Path|kubernetes)" && echo '✓ SUCCESS'
 
 echo ''
@@ -161,5 +165,9 @@ kubectl exec "$POD" -n "$NAMESPACE" -- env VAULT_TOKEN="$CHILD_TOKEN" vault auth
     printf "%-25s %-15s %s\n" "$path" "$type" "$desc"
   done
 echo ""
-echo "To clean up the test auth method, run:"
-echo "  kubectl exec $POD -n $NAMESPACE -- vault auth disable kubernetes-test"
+echo "To clean up the created auth methods, run:"
+echo "  kubectl exec $POD -n $NAMESPACE -- vault auth disable kubernetes-dev"
+echo "  kubectl exec $POD -n $NAMESPACE -- vault auth disable kubernetes-prod"
+echo "  kubectl exec $POD -n $NAMESPACE -- vault auth disable kubernetes-staging"
+echo ""
+echo "Or simply run this script again - it will clean up automatically!"
