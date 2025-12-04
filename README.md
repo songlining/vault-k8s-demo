@@ -1,249 +1,129 @@
-# Vault Kubernetes Demo
+# Vault Kubernetes Demo - Least-Privileged Auth Management
 
-This repository contains scripts to demonstrate HashiCorp Vault integration with Kubernetes.
+This repository demonstrates security best practices for managing HashiCorp Vault Kubernetes authentication methods using least-privileged child tokens instead of root tokens.
 
-## Branches
+## Overview
 
-### `main` - Basic Demo
-Contains `create_vault.sh` which demonstrates basic Vault setup with Kubernetes authentication.
+The `auth-test` branch contains scripts that show how to safely delegate Kubernetes auth method management without exposing root credentials. This follows the principle of least privilege by creating specialized tokens with minimal required permissions.
 
-### `auth-test` - Least-Privileged Auth Management
-Contains enhanced scripts demonstrating security best practices with least-privileged policies and child tokens for managing multiple Kubernetes auth methods.
+## Test Scenario
 
-## What the Script (create_vault.sh) Does
+**Goal**: Create and manage multiple Kubernetes auth methods at different paths using a least-privileged child token.
 
-Running the script against an existing k8s cluster, it will -
-1. Install vault server into "default" namespace using Helm with audit storage enabled
-2. Wait for the Vault pod to be ready, then initialize it with 5 key shares (threshold of 3)
-3. Unseal the vault server using the first 3 keys and login with the root token
-4. Enable file audit logging to stdout
-5. Create necessary Kubernetes RBAC permissions (ClusterRoleBinding)
-6. Enable the kubernetes authentication method in Vault
-7. Enable kv-v2 secrets engine and create a sample secret "mysecret" with username "larry"
-8. Create a policy to allow reading the secret and configure a Kubernetes role
-9. Install a demo app (vault-demo) into the same namespace for simplicity
-10. A vault sidecar will be injected together with the demo app using annotations
-11. The demo app authenticates with Vault using its service account token and retrieves the secret
+**What We're Testing**:
+- Creating a restricted policy that can only manage Kubernetes auth methods
+- Generating a child token with this policy (no root access)
+- Using the child token to enable and configure multiple Kubernetes auth methods
+- Verifying the policy correctly restricts access to other Vault paths
 
-## Auth-Test Branch Scripts
+## Scripts
 
 ### `create-k8s-auth-policy.sh`
-Demonstrates least-privileged token management for Kubernetes auth method configuration:
-- Creates a `k8s-auth-manager` policy with minimal required permissions
-- Creates a child token with this policy (no root access needed)
-- Tests the child token to create and manage multiple Kubernetes auth methods at different paths:
-  - `kubernetes-dev` - Development environment
-  - `kubernetes-prod` - Production environment
-  - `kubernetes-staging` - Staging environment
-- Verifies the policy restrictions (child token cannot access secrets or other auth methods)
+Main test script that demonstrates the complete workflow:
+
+1. **Creates the `k8s-auth-manager` policy** with minimal required permissions:
+   - Enable/disable Kubernetes auth methods at `kubernetes-*` paths
+   - Configure and manage roles within those auth methods
+   - Read-only access to list all auth methods
+   - **Explicitly denies**: access to secrets, other auth methods, and admin paths
+
+2. **Generates a child token** with only the `k8s-auth-manager` policy attached
+
+3. **Tests the child token** by creating multiple Kubernetes auth methods:
+   - `kubernetes-dev` - Development environment
+   - `kubernetes-prod` - Production environment
+   - `kubernetes-staging` - Staging environment
+
+4. **Verifies policy restrictions** by attempting prohibited operations:
+   - Reading secrets (should fail)
+   - Enabling other auth types (should fail)
+   - Accessing admin paths (should fail)
 
 ### `k8s-auth-manager-policy.hcl`
-Policy file defining least-privileged access for Kubernetes auth management:
-- Allows enabling/disabling Kubernetes auth methods at `kubernetes-*` paths
-- Allows full configuration and role management within those paths
-- Read-only access to list auth methods
-- Explicitly denies access to secrets, other auth methods, and administrative paths
+Policy definition file containing the least-privileged permissions:
 
-## Verification
+```hcl
+# Allow enabling/disabling kubernetes auth methods at kubernetes-* paths
+path "sys/auth/kubernetes-*" {
+  capabilities = ["create", "read", "update", "delete", "sudo"]
+}
 
-Once everything is running, check `/vault/secrets/mysecret` file has been populated. This is on the vault-demo container in vault-demo pod. When using k9s, type 's' on the pod to shell to it.
+# Allow full configuration of kubernetes auth methods
+path "auth/kubernetes-*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
 
-## Prerequisites
+# Read-only access to list all auth methods
+path "sys/auth" {
+  capabilities = ["read"]
+}
 
-- A running Kubernetes cluster
-- kubectl configured to access your cluster
-- Helm installed
-
-# More explanation of Vault Configuration in create_vault.sh
-
-Question is: how does vault authenticate to k8s TokenReview API ?
-
-## 1. RBAC Configuration
-
-The script creates a ClusterRoleBinding that grants the `system:auth-delegator` role to the default service account:
-
-```yaml:/Users/larry.song/work/hashicorp/vault-k8s-demo/create_vault.sh
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: my-auth-delegator-binding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: system:auth-delegator
-subjects:
-- kind: ServiceAccount
-  name: default
-  namespace: default
+# Deny access to secrets and other sensitive paths
+path "secret/*" {
+  capabilities = ["deny"]
+}
 ```
 
-The `system:auth-delegator` ClusterRole provides the necessary permissions to:
-- Access the TokenReview API (`tokenreviews.authentication.k8s.io`)
-- Validate service account tokens on behalf of other services
+## Understanding the Three Path Layers
 
-## 2. Service Account Token Authentication
+These three paths each control a different layer of the Kubernetes auth lifecycle. You need all of them if you want a role that can both create the auth method and fully manage it, while also being able to verify what exists.
 
-When Vault runs in a Kubernetes pod, it automatically receives:
-- **Service Account Token**: Mounted at `/var/run/secrets/kubernetes.io/serviceaccount/token`
-- **CA Certificate**: For verifying the Kubernetes API server's TLS certificate
-- **Namespace**: The pod's namespace information
+### 1. `path "sys/auth/kubernetes-*"` – Manage the mount itself
 
-## 3. Authentication Flow
+- This path hits the **system auth-mount API**, which is where enabling, tuning, or disabling auth methods happens.
+- Granting `create`, `update`, `read`, `delete`, `sudo` here lets the principal:
+  - Enable a new Kubernetes auth method at paths like `auth/kubernetes-dev`, `auth/kubernetes-prod`, etc.
+  - Tune or remove those mounts later.
+- **Without this stanza**, they could not create a *new* Kubernetes auth backend; they could only configure one that already exists.
 
-When Vault needs to validate a JWT token through the TokenReview API:
+### 2. `path "auth/kubernetes-*"` – Manage everything under that auth mount
 
-1. **Vault uses its own service account token** to authenticate to the Kubernetes API server
-2. **Makes a POST request** to `/apis/authentication.k8s.io/v1/tokenreviews` endpoint
-3. **Includes the JWT to be validated** in the request body
-4. **Kubernetes validates the JWT** and returns information about the token's validity and associated service account
-5. **Vault uses this response** to make authorization decisions
+- This covers the **plugin's own endpoints** under the mount: `/config`, `/role/*`, `/login`, etc., for any mount whose path begins with `auth/kubernetes`.
+- With `create`, `update`, `read`, `delete`, `list`, the principal can:
+  - Configure how Vault talks to the Kubernetes API (`auth/kubernetes-foo/config`).
+  - Create and update roles (`auth/kubernetes-foo/role/app`), and generally manage all Kubernetes auth-specific objects.
+- **If you only had the `sys/auth/...` stanza**, you could enable the backend but not configure it or create roles; it would be unusable.
 
-## 4. Configuration in Vault
+### 3. `path "sys/auth"` – Read-only view of all auth methods
 
-The script configures Vault with the Kubernetes API endpoint:
+- This is the **global listing of all auth mounts** in the cluster.
+- `read` here allows:
+  - Checking which auth methods are currently enabled and at what paths.
+  - Verifying that the new Kubernetes auth method mounted correctly (e.g. appears as `kubernetes-dev/`, `kubernetes-prod/`, etc.).
+- It does not grant any ability to change auth methods; it is purely for **observability/verification**.
 
-```bash:/Users/larry.song/work/hashicorp/vault-k8s-demo/create_vault.sh
-vault write auth/kubernetes/config \
-  kubernetes_host=https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT
-```
+**In short**: `sys/auth/kubernetes-*` lets you create/tune the Kubernetes auth mount, `auth/kubernetes-*` lets you configure and manage that mount's internals, and `sys/auth` lets you see the overall auth layout so you can confirm what you've created.
 
-This tells Vault:
-- **Where to find the Kubernetes API server** (using cluster-internal service discovery)
-- **How to connect securely** (HTTPS with cluster CA)
+## Running the Test
 
-## Key Points
+### Prerequisites
+- Vault server installed and unsealed
+- Root token or sufficient permissions to create policies and tokens
+- `kubectl` access to Kubernetes cluster (for auth method configuration)
 
-- **No explicit credentials needed**: Vault leverages the automatic service account token mounting in Kubernetes
-- **RBAC is crucial**: Without the `system:auth-delegator` role, Vault cannot access the TokenReview API
-- **Cluster-internal communication**: Uses Kubernetes service discovery for secure API access
-- **Mutual authentication**: Both Vault and Kubernetes validate each other's credentials
-
-This design follows Kubernetes security best practices by using built-in RBAC and service account mechanisms rather than managing separate credentials.
-        
-
-# Another question
-
-Question:
-
-in this command (runs in the k8s container):
-
-VAULT_RESPONSE=$(curl -X POST -H "X-Vault-Request: true" -d '{"jwt": "'"$SA_TOKEN"'", "role": "vault-demo"}' $VAULT_ADDR/v1/auth/kubernetes/login | jq .)
-
-the container uses the SA_TOKEN in the payload to authenticate to Vault (using k8s as the auth engine).  What happens between Vault and K8S API?
-
-## Step-by-Step Authentication Flow
-
-When the container executes that curl command with the `SA_TOKEN`, here's the detailed flow between Vault and the Kubernetes API:
-
-### 1. Container Sends Authentication Request
+### Execute
 ```bash
-VAULT_RESPONSE=$(curl -X POST -H "X-Vault-Request: true" -d '{"jwt": "'"$SA_TOKEN"'", "role": "vault-demo"}' \
-  $VAULT_ADDR/v1/auth/kubernetes/login | jq .)
+chmod +x create-k8s-auth-policy.sh
+./create-k8s-auth-policy.sh
 ```
 
-The container sends:
-- **JWT Token**: The service account token (`$SA_TOKEN`) from `/var/run/secrets/kubernetes.io/serviceaccount/token`
-- **Role**: `vault-demo` (the Vault role to authenticate against)
-- **Endpoint**: `/v1/auth/kubernetes/login`
+## Expected Results
 
-### 2. Vault Receives the Request
+**✅ Should Succeed**:
+- Policy creation
+- Child token generation
+- Enabling kubernetes-dev, kubernetes-prod, kubernetes-staging auth methods
+- Configuring each auth method with Kubernetes API details
+- Creating and managing roles within each auth method
 
-Vault's Kubernetes auth method receives the JWT and:
-- Extracts the JWT from the request payload
-- Identifies the role (`vault-demo`) and its configuration
-- Prepares to validate the JWT with Kubernetes
+**❌ Should Fail (Verifying Restrictions)**:
+- Reading secrets from `secret/` path
+- Enabling non-Kubernetes auth methods (e.g., `userpass`)
+- Accessing administrative paths
+- Managing auth methods not matching `kubernetes-*` pattern
 
-### 3. Vault Calls Kubernetes TokenReview API
+## Why This Matters
 
-Vault makes an API call to Kubernetes using **its own service account token**:
+**Security Best Practice**: Instead of distributing root tokens to teams or automation, you can create specialized child tokens with just enough permissions to perform specific tasks. This minimizes the blast radius if a token is compromised.
 
-```http
-POST /apis/authentication.k8s.io/v1/tokenreviews
-Authorization: Bearer <vault-service-account-token>
-Content-Type: application/json
-
-{
-  "apiVersion": "authentication.k8s.io/v1",
-  "kind": "TokenReview",
-  "spec": {
-    "token": "<container-sa-token>"
-  }
-}
-```
-
-### 4. Kubernetes Validates the Token
-
-Kubernetes API server:
-- **Verifies the JWT signature** using its internal signing keys
-- **Checks token expiration** and validity
-- **Extracts service account information** (name, namespace, UID)
-- **Returns validation results**
-
-### 5. Kubernetes Responds to Vault
-
-```json
-{
-  "apiVersion": "authentication.k8s.io/v1",
-  "kind": "TokenReview",
-  "status": {
-    "authenticated": true,
-    "user": {
-      "username": "system:serviceaccount:default:default",
-      "uid": "<service-account-uid>",
-      "groups": [
-        "system:serviceaccounts",
-        "system:serviceaccounts:default",
-        "system:authenticated"
-      ]
-    }
-  }
-}
-```
-
-### 6. Vault Validates Against Role Configuration
-
-Vault checks if the validated service account matches the role configuration:
-
-```bash
-# From the script's role configuration:
-vault write auth/kubernetes/role/vault-demo \
-    bound_service_account_names=default \
-    bound_service_account_namespaces=default \
-    policies=default,mysecret \
-    ttl=1h
-```
-
-Vault verifies:
-- ✅ Service account name: `default` (matches `bound_service_account_names`)
-- ✅ Namespace: `default` (matches `bound_service_account_namespaces`)
-- ✅ Token is valid and authenticated
-
-### 7. Vault Issues Token
-
-If validation succeeds, Vault:
-- **Creates a new Vault token** with the configured policies (`default`, `mysecret`)
-- **Sets TTL** to 1 hour
-- **Returns the token** to the container
-
-```json
-{
-  "auth": {
-    "client_token": "hvs.CAESIJ...",
-    "accessor": "hmac-sha256:...",
-    "policies": ["default", "mysecret"],
-    "token_policies": ["default", "mysecret"],
-    "lease_duration": 3600,
-    "renewable": true
-  }
-}
-```
-
-## Key Security Aspects
-
-1. **Vault never stores the original JWT** - it only uses it for validation
-2. **Kubernetes is the source of truth** for token validity
-3. **Vault uses its own credentials** to call the TokenReview API (via the `system:auth-delegator` role)
-4. **Short-lived tokens** - both the original JWT and the issued Vault token have TTLs
-5. **Role-based authorization** - Vault maps validated service accounts to specific policies
-
-This design ensures that Vault can securely validate Kubernetes service account tokens without needing to manage Kubernetes signing keys or understand JWT internals - it delegates that complexity to Kubernetes itself.
+**Real-World Use Case**: A platform team can safely delegate the ability to configure Kubernetes auth methods for different environments (dev/staging/prod) to application teams without giving them access to secrets or other sensitive Vault operations.
