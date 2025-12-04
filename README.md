@@ -1,6 +1,14 @@
 # Vault Kubernetes Demo
 
-This repository contains a script to demonstrate HashiCorp Vault integration with Kubernetes.
+This repository contains scripts to demonstrate HashiCorp Vault integration with Kubernetes.
+
+## Branches
+
+### `main` - Basic Demo
+Contains `create_vault.sh` which demonstrates basic Vault setup with Kubernetes authentication.
+
+### `auth-test` - Least-Privileged Auth Management
+Contains enhanced scripts demonstrating security best practices with least-privileged policies and child tokens for managing multiple Kubernetes auth methods.
 
 ## What the Script (create_vault.sh) Does
 
@@ -16,6 +24,25 @@ Running the script against an existing k8s cluster, it will -
 9. Install a demo app (vault-demo) into the same namespace for simplicity
 10. A vault sidecar will be injected together with the demo app using annotations
 11. The demo app authenticates with Vault using its service account token and retrieves the secret
+
+## Auth-Test Branch Scripts
+
+### `create-k8s-auth-policy.sh`
+Demonstrates least-privileged token management for Kubernetes auth method configuration:
+- Creates a `k8s-auth-manager` policy with minimal required permissions
+- Creates a child token with this policy (no root access needed)
+- Tests the child token to create and manage multiple Kubernetes auth methods at different paths:
+  - `kubernetes-dev` - Development environment
+  - `kubernetes-prod` - Production environment
+  - `kubernetes-staging` - Staging environment
+- Verifies the policy restrictions (child token cannot access secrets or other auth methods)
+
+### `k8s-auth-manager-policy.hcl`
+Policy file defining least-privileged access for Kubernetes auth management:
+- Allows enabling/disabling Kubernetes auth methods at `kubernetes-*` paths
+- Allows full configuration and role management within those paths
+- Read-only access to list auth methods
+- Explicitly denies access to secrets, other auth methods, and administrative paths
 
 ## Verification
 
