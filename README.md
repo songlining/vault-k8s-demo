@@ -6,6 +6,10 @@ This repository demonstrates security best practices for managing HashiCorp Vaul
 
 The `auth-test` branch contains scripts that show how to safely delegate Kubernetes auth method management without exposing root credentials. This follows the principle of least privilege by creating specialized tokens with minimal required permissions.
 
+## Prerequisite
+
+Tested on Docker Desktop on MacOS, using "kind" to manage the cluster.
+
 ## Test Scenario
 
 **Goal**: Create and manage multiple Kubernetes auth methods at different paths using a least-privileged child token.
@@ -127,3 +131,134 @@ chmod +x create-k8s-auth-policy.sh
 **Security Best Practice**: Instead of distributing root tokens to teams or automation, you can create specialized child tokens with just enough permissions to perform specific tasks. This minimizes the blast radius if a token is compromised.
 
 **Real-World Use Case**: A platform team can safely delegate the ability to configure Kubernetes auth methods for different environments (dev/staging/prod) to application teams without giving them access to secrets or other sensitive Vault operations.
+
+---
+
+## Advanced: Entity-Based Templated Policies
+
+### Problem Statement
+
+The basic wildcard approach (`kubernetes-*`) has a limitation: **multiple workspaces within the same project can access each other's auth backends**.
+
+For example, if you have:
+- `my-project-abc123` (dev environment)
+- `my-project-xyz789` (staging environment)
+- `my-project-def456` (prod environment)
+
+A policy with `sys/auth/my-project-*` would allow any workspace to manage **all three** backends, not just their own.
+
+### Solution: Entity Metadata + Templated Policies
+
+Vault supports **policy templating** using entity metadata. This allows you to create policies where the allowed paths are dynamically determined based on the authenticated user's entity metadata.
+
+### `create-entity-based-policy.sh`
+
+This script demonstrates workspace isolation using entity metadata:
+
+1. **Sets up userpass auth** (mimicking Terraform workspace OIDC login)
+2. **Creates an Entity** with metadata: `workspace-name=kubernetes-my_project_123`
+3. **Creates an EntityAlias** linking the userpass user to the entity
+4. **Applies a templated policy** using `{{identity.entity.metadata.workspace-name}}`
+5. **Tests isolation** - the user can ONLY access `kubernetes-my_project_123`, not other paths
+
+**Note**: This script also updates `create-k8s-auth-policy.sh` which now uses the same entity-based approach.
+
+### `k8s-auth-manager-policy-templated.hcl`
+
+Templated policy that uses entity metadata for precise access control:
+
+```hcl
+# Enable/disable auth method ONLY at the workspace-specific path
+path "sys/auth/{{identity.entity.metadata.workspace-name}}" {
+  capabilities = ["create", "update", "read", "delete", "sudo"]
+}
+
+# Manage ONLY the workspace-specific auth method
+path "auth/{{identity.entity.metadata.workspace-name}}/*" {
+  capabilities = ["create", "update", "read", "delete", "list"]
+}
+
+# Read-only access to list all auth methods
+path "sys/auth" {
+  capabilities = ["read"]
+}
+
+# Deny access to secrets and identity tampering
+path "secret/*" {
+  capabilities = ["deny"]
+}
+
+path "identity/*" {
+  capabilities = ["deny"]
+}
+```
+
+### Running the Entity-Based Demo
+
+**Prerequisites**: Vault must be initialized with root token access.
+
+```bash
+# First, ensure Vault is set up (if not already)
+./create_vault.sh
+
+# Then run the entity-based policy demo
+chmod +x create-entity-based-policy.sh
+./create-entity-based-policy.sh
+```
+
+**Verified Test Results** (all tests passed):
+- ✅ List auth methods (read-only access)
+- ✅ Enable/configure/manage `kubernetes-my_project_123` (own workspace)
+- ✅ Create roles in own workspace
+- ❌ **Correctly denied**: Access to `kubernetes-other_project` (other workspace)
+- ❌ **Correctly denied**: Access to `kubernetes-dev` (generic path)
+- ❌ **Correctly denied**: Read secrets
+- ❌ **Correctly denied**: Modify entity metadata
+
+### Key Benefits
+
+**✅ True Workspace Isolation**:
+- Each workspace can ONLY manage its specific auth backend
+- Workspace with `workspace-name=my-project-abc123` cannot access `my-project-xyz789`
+- No risk of cross-workspace interference
+
+**✅ No Code Changes Required**:
+- Works with existing backend naming conventions
+- Simply store the full backend name in entity metadata
+- Policy template handles the rest
+
+**✅ Additional Security**:
+- Prevents metadata tampering (identity paths are denied)
+- Follows principle of least privilege
+- Easy to audit (metadata is visible in entity)
+
+### How This Solves the Client's Problem
+
+The client had projects with backends named `my-project-<randomstring>`, where multiple environments share the same prefix. Using entity-based templating:
+
+1. **During OIDC login**: Store the full backend name in entity metadata
+   - Example: `workspace-name=my-project-abc123`
+
+2. **Apply templated policy**: User can only access paths matching their metadata
+   - Can manage: `sys/auth/my-project-abc123`
+   - Cannot manage: `sys/auth/my-project-xyz789` or `sys/auth/my-project-*`
+
+3. **Result**: True isolation without code changes across projects
+
+### Template Variables Available
+
+Vault provides several template variables you can use in policies:
+
+- `{{identity.entity.id}}` - Entity ID
+- `{{identity.entity.name}}` - Entity name
+- `{{identity.entity.metadata.KEY}}` - Custom metadata (like `workspace-name`)
+- `{{identity.entity.aliases.AUTH_MOUNT.name}}` - Alias name for specific auth mount
+
+### Comparison: Wildcard vs Entity-Based
+
+| Approach | Access Pattern | Use Case |
+|----------|---------------|----------|
+| **Wildcard** (`kubernetes-*`) | All backends matching pattern | Team manages multiple environments (dev/staging/prod) |
+| **Entity-Based** (metadata template) | Single specific backend | Individual workspace needs isolated access |
+
+Both approaches are valid - choose based on your security and operational requirements.

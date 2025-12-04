@@ -1,8 +1,8 @@
-# Policy: k8s-auth-manager (Entity-Based Templated Version)
+# Policy: k8s-auth-manager-templated
 # Purpose: Allow creation and management of Kubernetes auth methods using entity metadata
-# This provides workspace isolation - each workspace can only manage its own auth backend
+# This solves the problem of workspace isolation when multiple workspaces share a project prefix
 
-# Enable/disable Kubernetes auth method ONLY at the path specified in entity metadata
+# Enable/disable Kubernetes auth methods ONLY at the path specified in entity metadata
 # The path is templated using {{identity.entity.metadata.workspace-name}}
 # Example: If workspace-name=kubernetes-my_project_123, can only access sys/auth/kubernetes-my_project_123
 path "sys/auth/{{identity.entity.metadata.workspace-name}}" {

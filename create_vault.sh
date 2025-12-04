@@ -34,41 +34,45 @@ kubectl exec -i "$POD" -n "$NAMESPACE" -- sh <<'EOF'
 VAULT_INIT_OUTPUT=$(vault operator init -key-shares=5 -key-threshold=3)
 
 # Step 2: Split output into lines and parse keys/token
-echo "$VAULT_INIT_OUTPUT" | awk '{
-    gsub(/Unseal Key [0-9]+: |Initial Root Token: /, "\n&")
-    sub(/^\n/, "")
-    print
-}' | {
-    while IFS= read -r line; do
-        case $line in
-            "Unseal Key"*)
-                key=$(echo "$line" | awk '{print $4}')
-                # Store keys sequentially
-                case $line in
-                    *"1:"*) key1=$key ;;
-                    *"2:"*) key2=$key ;;
-                    *"3:"*) key3=$key ;;
-                esac
-                ;;
-            "Initial Root Token"*)
-                root_token=$(echo "$line" | awk '{print $4}')
-                ;;
-        esac
-    done
+ROOT_TOKEN_VALUE=""
+echo "$VAULT_INIT_OUTPUT" | while IFS= read -r line; do
+    if echo "$line" | grep -q "Initial Root Token:"; then
+        ROOT_TOKEN_VALUE=$(echo "$line" | awk '{print $NF}')
+        echo "Root token: $ROOT_TOKEN_VALUE"
+    fi
+done
 
-    # Step 3: Unseal with first three keys
-    vault operator unseal "$key1"
-    vault operator unseal "$key2"
-    vault operator unseal "$key3"
+# Save the full output to extract token later
+echo "$VAULT_INIT_OUTPUT" > /tmp/vault_init_output.txt
 
-    # Step 4: Login with root token
-    vault login "$root_token"
-    # store root_token to a file so it can be found later
-    echo "$root_token" > /vault/config/root_token
-}
+# Parse keys and token
+KEY1=$(echo "$VAULT_INIT_OUTPUT" | grep "Unseal Key 1:" | awk '{print $NF}')
+KEY2=$(echo "$VAULT_INIT_OUTPUT" | grep "Unseal Key 2:" | awk '{print $NF}')
+KEY3=$(echo "$VAULT_INIT_OUTPUT" | grep "Unseal Key 3:" | awk '{print $NF}')
+ROOT_TOKEN=$(echo "$VAULT_INIT_OUTPUT" | grep "Initial Root Token:" | awk '{print $NF}')
 
-echo "Vault initialized, unsealed, logged in and ready for use"
+# Step 3: Unseal with first three keys
+vault operator unseal "$KEY1"
+vault operator unseal "$KEY2"
+vault operator unseal "$KEY3"
+
+# Step 4: Login with root token
+vault login "$ROOT_TOKEN"
+
+# Store root token to a file
+echo "$ROOT_TOKEN" > /vault/config/root_token
+chmod 644 /vault/config/root_token
+
+echo "Vault initialized, unsealed, and root token saved"
 EOF
+
+# Extract root token from pod and save locally
+echo ""
+echo "Saving root token for future use..."
+ROOT_TOKEN=$(kubectl exec "$POD" -n "$NAMESPACE" -- cat /vault/config/root_token)
+echo "$ROOT_TOKEN" > root_token.txt
+echo "✓ Root token saved to root_token.txt"
+echo ""
 
 kubectl exec -ti "$POD" -n "$NAMESPACE" -- vault audit enable file file_path=stdout
 

@@ -1,0 +1,64 @@
+# Vault tokens and secrets
+*.token
+root_token
+child_token
+vault_token
+
+# Kubernetes manifests with sensitive data
+*-secrets.yaml
+*-credentials.yaml
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Helm and Kubernetes
+*.tgz
+charts/*/
+kubeconfig
+
+# Script outputs
+*.out
+output.txt
+results.txt
+
+# State files
+.terraform/
+terraform.tfstate*
+*.tfvars
+
+# Node modules (if any scripts use npm)
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+entity-alias-policy.md
+
