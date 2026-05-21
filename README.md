@@ -1,222 +1,429 @@
-# Vault Kubernetes Demo
+# Vault Kubernetes Auth and OTel Metrics Demo
 
-This repository contains a script to demonstrate HashiCorp Vault integration with Kubernetes.
+This demo shows how an OpenTelemetry collector running in Kubernetes can scrape
+Vault Prometheus metrics without enabling unauthenticated access to
+`/v1/sys/metrics`.
 
-## What the Script (create_vault.sh) Does
+The key pattern is:
 
-Running the script against an existing k8s cluster, it will -
-1. Install vault server into "default" namespace using Helm with audit storage enabled
-2. Wait for the Vault pod to be ready, then initialize it with 5 key shares (threshold of 3)
-3. Unseal the vault server using the first 3 keys and login with the root token
-4. Enable file audit logging to stdout
-5. Create necessary Kubernetes RBAC permissions (ClusterRoleBinding)
-6. Enable the kubernetes authentication method in Vault
-7. Enable kv-v2 secrets engine and create a sample secret "mysecret" with username "larry"
-8. Create a policy to allow reading the secret and configure a Kubernetes role
-9. Install a demo app (vault-demo) into the same namespace for simplicity
-10. A vault sidecar will be injected together with the demo app using annotations
-11. The demo app authenticates with Vault using its service account token and retrieves the secret
+1. Kubernetes authenticates the OTel collector workload to Vault.
+2. Vault Agent runs as a sidecar and writes a short-lived Vault token to a local
+   file.
+3. The OTel collector reads that token through `bearer_token_file`.
+4. Vault only grants that token read access to `sys/metrics`.
 
-## Verification
+This is useful when port `8200` is reachable through the same access path used
+for the Vault UI. In that situation, enabling
+`unauthenticated_metrics_access = true` would allow any user with network access
+to read Vault metrics. This demo keeps metrics authenticated and scoped to a
+dedicated Kubernetes service account.
 
-Once everything is running, check `/vault/secrets/mysecret` file has been populated. This is on the vault-demo container in vault-demo pod. When using k9s, type 's' on the pod to shell to it.
+## What the demo proves
+
+- Unauthenticated requests to `sys/metrics` are blocked.
+- A Kubernetes workload can authenticate to Vault through Kubernetes auth.
+- Vault Agent can provide the workload with a token file.
+- OTel can use `bearer_token_file` to scrape Vault metrics.
+- The issued Vault token is least-privilege: it can read `sys/metrics` and
+  nothing else.
+
+## Demo architecture
+
+```text
+                    Kubernetes cluster
+
+  observability namespace
+  -----------------------------------------------------------------
+  ServiceAccount: otel-collector
+          |
+          | Kubernetes service account JWT
+          v
+  Pod: otel-collector
+  +-------------------------------+      +-------------------------+
+  | OpenTelemetry collector       |      | Vault Agent sidecar     |
+  |                               |      |                         |
+  | Prometheus receiver           |      | Kubernetes auth login   |
+  | bearer_token_file:            |<-----| writes token to:        |
+  | /vault/secrets/token          |      | /vault/secrets/token    |
+  +-------------------------------+      +-------------------------+
+          |
+          | GET /v1/sys/metrics?format=prometheus
+          | X-Vault-Token: <token from file>
+          v
+  -----------------------------------------------------------------
+  default namespace
+
+  Vault server
+  - Kubernetes auth method enabled
+  - role: otel-vault-metrics
+  - policy: vault-metrics-read
+```
+
+## Resources created by the script
+
+`create_vault.sh` installs and configures a complete demo environment.
+
+| Resource | Purpose |
+| --- | --- |
+| `vault` Helm release | Runs Vault and the Vault Agent injector. |
+| `default/vault-0` | Vault server pod. |
+| `my-auth-delegator-binding` | Allows the Vault server service account to use the Kubernetes TokenReview API. |
+| `auth/kubernetes` | Vault auth method used to validate Kubernetes service account tokens. |
+| `kv-v2/vault-demo/mysecret` | Baseline secret used by the original sidecar demo. |
+| `vault-demo` role and `mysecret` policy | Baseline Kubernetes auth role for reading the demo secret. |
+| `observability` namespace | Namespace for the metrics collection path. |
+| `observability/otel-collector` service account | Dedicated identity for the OTel collector. |
+| `vault-metrics-read` policy | Grants read access only to `sys/metrics`. |
+| `otel-vault-metrics` role | Maps the OTel service account to the metrics policy. |
+| `observability/otel-collector` deployment | OTel collector with an injected Vault Agent sidecar. |
+| `observability/vault-metrics-check` pod | Simple verification pod using the same auth pattern. |
+
+## Important configuration
+
+### Vault telemetry
+
+The Helm values in `create_vault.sh` enable Prometheus metric retention:
+
+```hcl
+telemetry {
+  prometheus_retention_time = "24h"
+  disable_hostname = true
+}
+```
+
+The script does **not** enable `unauthenticated_metrics_access`.
+
+### Vault policy
+
+The OTel collector receives only this policy:
+
+```hcl
+path "sys/metrics" {
+  capabilities = ["read"]
+}
+```
+
+### Kubernetes auth role
+
+The Vault role is bound only to the OTel collector service account in the
+`observability` namespace:
+
+```sh
+vault write auth/kubernetes/role/otel-vault-metrics \
+  alias_name_source=serviceaccount_name \
+  bound_service_account_names=otel-collector \
+  bound_service_account_namespaces=observability \
+  policies=vault-metrics-read \
+  ttl=1h
+```
+
+### Vault Agent token injection
+
+The OTel deployment uses these annotations:
+
+```yaml
+vault.hashicorp.com/agent-inject: "true"
+vault.hashicorp.com/role: "otel-vault-metrics"
+vault.hashicorp.com/agent-inject-token: "true"
+vault.hashicorp.com/agent-inject-containers: "otel-collector"
+```
+
+`agent-inject-token: "true"` makes Vault Agent write the Vault token to:
+
+```text
+/vault/secrets/token
+```
+
+### OTel receiver configuration
+
+The OTel collector uses the token file directly:
+
+```yaml
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: vault
+          scrape_interval: 15s
+          metrics_path: /v1/sys/metrics
+          params:
+            format:
+              - prometheus
+          bearer_token_file: /vault/secrets/token
+          static_configs:
+            - targets:
+                - vault.default.svc.cluster.local:8200
+```
 
 ## Prerequisites
 
-- A running Kubernetes cluster
-- kubectl configured to access your cluster
-- Helm installed
+- A disposable Kubernetes cluster.
+- `kubectl` configured for that cluster.
+- Helm installed.
+- The HashiCorp Helm chart repository available.
 
-# More explanation of Vault Configuration in create_vault.sh
+For a local demo, a fresh kind cluster works well:
 
-Question is: how does vault authenticate to k8s TokenReview API ?
-
-## 1. RBAC Configuration
-
-The script creates a ClusterRoleBinding that grants the `system:auth-delegator` role to the default service account:
-
-```yaml:/Users/larry.song/work/hashicorp/vault-k8s-demo/create_vault.sh
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: my-auth-delegator-binding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: system:auth-delegator
-subjects:
-- kind: ServiceAccount
-  name: default
-  namespace: default
+```sh
+kind create cluster --name vault-lab
+kubectl config use-context kind-vault-lab
+helm repo add hashicorp https://helm.releases.hashicorp.com
+helm repo update
 ```
 
-The `system:auth-delegator` ClusterRole provides the necessary permissions to:
-- Access the TokenReview API (`tokenreviews.authentication.k8s.io`)
-- Validate service account tokens on behalf of other services
+## Run the demo setup
 
-## 2. Service Account Token Authentication
+Run the setup script from the repository root:
 
-When Vault runs in a Kubernetes pod, it automatically receives:
-- **Service Account Token**: Mounted at `/var/run/secrets/kubernetes.io/serviceaccount/token`
-- **CA Certificate**: For verifying the Kubernetes API server's TLS certificate
-- **Namespace**: The pod's namespace information
-
-## 3. Authentication Flow
-
-When Vault needs to validate a JWT token through the TokenReview API:
-
-1. **Vault uses its own service account token** to authenticate to the Kubernetes API server
-2. **Makes a POST request** to `/apis/authentication.k8s.io/v1/tokenreviews` endpoint
-3. **Includes the JWT to be validated** in the request body
-4. **Kubernetes validates the JWT** and returns information about the token's validity and associated service account
-5. **Vault uses this response** to make authorization decisions
-
-## 4. Configuration in Vault
-
-The script configures Vault with the Kubernetes API endpoint:
-
-```bash:/Users/larry.song/work/hashicorp/vault-k8s-demo/create_vault.sh
-vault write auth/kubernetes/config \
-  kubernetes_host=https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT
+```sh
+bash create_vault.sh
 ```
 
-This tells Vault:
-- **Where to find the Kubernetes API server** (using cluster-internal service discovery)
-- **How to connect securely** (HTTPS with cluster CA)
+The script installs Vault, initialises and unseals it, configures Kubernetes
+auth, deploys the baseline secret demo, deploys the OTel metrics path, and runs
+two metrics checks.
 
-## Key Points
+Successful setup ends with output similar to:
 
-- **No explicit credentials needed**: Vault leverages the automatic service account token mounting in Kubernetes
-- **RBAC is crucial**: Without the `system:auth-delegator` role, Vault cannot access the TokenReview API
-- **Cluster-internal communication**: Uses Kubernetes service discovery for secure API access
-- **Mutual authentication**: Both Vault and Kubernetes validate each other's credentials
-
-This design follows Kubernetes security best practices by using built-in RBAC and service account mechanisms rather than managing separate credentials.
-        
-
-# Another question
-
-Question:
-
-in this command (runs in the k8s container):
-
-VAULT_RESPONSE=$(curl -X POST -H "X-Vault-Request: true" -d '{"jwt": "'"$SA_TOKEN"'", "role": "vault-demo"}' $VAULT_ADDR/v1/auth/kubernetes/login | jq .)
-
-the container uses the SA_TOKEN in the payload to authenticate to Vault (using k8s as the auth engine).  What happens between Vault and K8S API?
-
-## Step-by-Step Authentication Flow
-
-When the container executes that curl command with the `SA_TOKEN`, here's the detailed flow between Vault and the Kubernetes API:
-
-### 1. Container Sends Authentication Request
-```bash
-VAULT_RESPONSE=$(curl -X POST -H "X-Vault-Request: true" -d '{"jwt": "'"$SA_TOKEN"'", "role": "vault-demo"}' \
-  $VAULT_ADDR/v1/auth/kubernetes/login | jq .)
+```text
+Unauthenticated sys/metrics HTTP status: 403
+# HELP vault_audit_log_request vault_audit_log_request
+OpenTelemetry collector is configured to scrape Vault sys/metrics with bearer_token_file=/vault/secrets/token.
 ```
 
-The container sends:
-- **JWT Token**: The service account token (`$SA_TOKEN`) from `/var/run/secrets/kubernetes.io/serviceaccount/token`
-- **Role**: `vault-demo` (the Vault role to authenticate against)
-- **Endpoint**: `/v1/auth/kubernetes/login`
+## Presenter commands
 
-### 2. Vault Receives the Request
+The repository includes a guided demo driver so the live demo is easier to run
+than copying commands one by one.
 
-Vault's Kubernetes auth method receives the JWT and:
-- Extracts the JWT from the request payload
-- Identifies the role (`vault-demo`) and its configuration
-- Prepares to validate the JWT with Kubernetes
+```sh
+make help      # Show available commands
+make verify    # Check the cluster is ready for the demo
+make demo      # Start the guided live demo flow
+make status    # Show the Kubernetes resources used by the demo
+```
 
-### 3. Vault Calls Kubernetes TokenReview API
+Use `make demo` for the customer walkthrough. It pauses between sections and
+prints each command before running it, so the audience can follow both the story
+and the proof points.
 
-Vault makes an API call to Kubernetes using **its own service account token**:
+## Live demo flow
 
-```http
-POST /apis/authentication.k8s.io/v1/tokenreviews
-Authorization: Bearer <vault-service-account-token>
-Content-Type: application/json
+`make demo` walks through these same steps. The commands below are included as a
+reference if you prefer to drive the demo manually.
 
-{
-  "apiVersion": "authentication.k8s.io/v1",
-  "kind": "TokenReview",
-  "spec": {
-    "token": "<container-sa-token>"
-  }
+### 1. Show the workloads
+
+```sh
+kubectl get pods -n default
+kubectl get pods -n observability
+```
+
+Expected result:
+
+```text
+vault-0                 1/1 Running
+vault-demo              2/2 Running
+otel-collector-...      2/2 Running
+vault-metrics-check     2/2 Running
+```
+
+The `2/2` pods show that the application container and Vault Agent sidecar are
+both running.
+
+### 2. Show unauthenticated metrics are blocked
+
+```sh
+kubectl exec -n observability vault-metrics-check -c vault-metrics-check -- \
+  sh -c 'curl -s -o /tmp/vault-metrics-unauth.out -w "%{http_code}" \
+  "http://vault.default.svc.cluster.local:8200/v1/sys/metrics?format=prometheus"'
+```
+
+Expected result:
+
+```text
+403
+```
+
+This proves the demo has not enabled unauthenticated metrics access.
+
+### 3. Show Vault Agent has injected a token file
+
+```sh
+kubectl exec -n observability vault-metrics-check -c vault-metrics-check -- \
+  ls -l /vault/secrets/token
+```
+
+This token is generated by Vault Agent after it authenticates with Vault using
+the pod's Kubernetes service account token.
+
+### 4. Show authenticated metrics work
+
+```sh
+kubectl exec -n observability vault-metrics-check -c vault-metrics-check -- \
+  sh -c 'curl -sf -H "X-Vault-Token: $(cat /vault/secrets/token)" \
+  "http://vault.default.svc.cluster.local:8200/v1/sys/metrics?format=prometheus" | head'
+```
+
+Expected result:
+
+```text
+# HELP vault_...
+# TYPE vault_...
+```
+
+This proves the same endpoint is available when the request includes a Vault
+token with the right policy.
+
+### 5. Show the least-privilege policy
+
+```sh
+kubectl exec vault-0 -- vault policy read vault-metrics-read
+```
+
+Expected result:
+
+```hcl
+path "sys/metrics" {
+  capabilities = ["read"]
 }
 ```
 
-### 4. Kubernetes Validates the Token
+### 6. Show the role binding to Kubernetes identity
 
-Kubernetes API server:
-- **Verifies the JWT signature** using its internal signing keys
-- **Checks token expiration** and validity
-- **Extracts service account information** (name, namespace, UID)
-- **Returns validation results**
+```sh
+kubectl exec vault-0 -- vault read auth/kubernetes/role/otel-vault-metrics
+```
 
-### 5. Kubernetes Responds to Vault
+Point out these fields:
 
-```json
-{
-  "apiVersion": "authentication.k8s.io/v1",
-  "kind": "TokenReview",
-  "status": {
-    "authenticated": true,
-    "user": {
-      "username": "system:serviceaccount:default:default",
-      "uid": "<service-account-uid>",
-      "groups": [
-        "system:serviceaccounts",
-        "system:serviceaccounts:default",
-        "system:authenticated"
-      ]
-    }
-  }
+```text
+bound_service_account_names         [otel-collector]
+bound_service_account_namespaces    [observability]
+token_policies                      [vault-metrics-read]
+```
+
+### 7. Show the OTel scrape configuration
+
+```sh
+kubectl get configmap otel-collector-config -n observability -o yaml
+```
+
+Point out:
+
+```yaml
+metrics_path: /v1/sys/metrics
+bearer_token_file: /vault/secrets/token
+targets:
+  - vault.default.svc.cluster.local:8200
+```
+
+## How the pieces work together
+
+1. The OTel pod starts with Kubernetes service account
+   `observability/otel-collector`.
+2. Vault Agent is injected into the pod by the Vault Agent injector.
+3. Vault Agent sends the pod's Kubernetes service account JWT to Vault's
+   Kubernetes auth endpoint.
+4. Vault asks the Kubernetes TokenReview API to validate that JWT.
+5. Vault checks that the service account and namespace match the
+   `otel-vault-metrics` role.
+6. Vault issues a short-lived token with the `vault-metrics-read` policy.
+7. Vault Agent writes that token to `/vault/secrets/token`.
+8. The OTel collector's Prometheus receiver reads that token file and uses it as
+   the bearer token when scraping `/v1/sys/metrics?format=prometheus`.
+
+## Baseline sidecar secret demo
+
+The script also keeps the original secret sidecar example. It demonstrates the
+same Kubernetes auth wiring with a simple KV secret:
+
+- Vault role: `vault-demo`
+- Vault policy: `mysecret`
+- Secret path: `kv-v2/data/vault-demo/mysecret`
+- Pod: `default/vault-demo`
+
+Check the rendered secret file:
+
+```sh
+kubectl exec vault-demo -c vault-demo -- cat /vault/secrets/mysecret
+```
+
+This is separate from the OTel metrics path. It is included as a simple baseline
+to show the Kubernetes auth flow before the metrics-specific example.
+
+## Troubleshooting
+
+### OTel or check pod is not `2/2 Running`
+
+Check the pod and sidecar logs:
+
+```sh
+kubectl describe pod -n observability -l app=otel-collector
+kubectl logs -n observability deployment/otel-collector -c vault-agent
+kubectl logs -n observability deployment/otel-collector -c otel-collector
+```
+
+### Unauthenticated metrics returns `200`
+
+That means Vault has been configured with unauthenticated metrics access. This
+demo expects that setting to remain disabled.
+
+Check the Vault listener configuration and remove:
+
+```hcl
+telemetry {
+  unauthenticated_metrics_access = true
 }
 ```
 
-### 6. Vault Validates Against Role Configuration
+### Authenticated metrics returns `403`
 
-Vault checks if the validated service account matches the role configuration:
+Check the Vault policy and role:
 
-```bash
-# From the script's role configuration:
-vault write auth/kubernetes/role/vault-demo \
-    bound_service_account_names=default \
-    bound_service_account_namespaces=default \
-    policies=default,mysecret \
-    ttl=1h
+```sh
+kubectl exec vault-0 -- vault policy read vault-metrics-read
+kubectl exec vault-0 -- vault read auth/kubernetes/role/otel-vault-metrics
 ```
 
-Vault verifies:
-- ✅ Service account name: `default` (matches `bound_service_account_names`)
-- ✅ Namespace: `default` (matches `bound_service_account_namespaces`)
-- ✅ Token is valid and authenticated
+Also confirm the pod is using the expected Kubernetes service account:
 
-### 7. Vault Issues Token
-
-If validation succeeds, Vault:
-- **Creates a new Vault token** with the configured policies (`default`, `mysecret`)
-- **Sets TTL** to 1 hour
-- **Returns the token** to the container
-
-```json
-{
-  "auth": {
-    "client_token": "hvs.CAESIJ...",
-    "accessor": "hmac-sha256:...",
-    "policies": ["default", "mysecret"],
-    "token_policies": ["default", "mysecret"],
-    "lease_duration": 3600,
-    "renewable": true
-  }
-}
+```sh
+kubectl get pod -n observability -l app=otel-collector \
+  -o jsonpath='{.items[0].spec.serviceAccountName}{"\n"}'
 ```
 
-## Key Security Aspects
+Expected:
 
-1. **Vault never stores the original JWT** - it only uses it for validation
-2. **Kubernetes is the source of truth** for token validity
-3. **Vault uses its own credentials** to call the TokenReview API (via the `system:auth-delegator` role)
-4. **Short-lived tokens** - both the original JWT and the issued Vault token have TTLs
-5. **Role-based authorization** - Vault maps validated service accounts to specific policies
+```text
+otel-collector
+```
 
-This design ensures that Vault can securely validate Kubernetes service account tokens without needing to manage Kubernetes signing keys or understand JWT internals - it delegates that complexity to Kubernetes itself.
+### Vault is sealed
+
+This demo script initialises and unseals Vault during setup. If you reuse an old
+cluster and Vault is sealed, use a fresh disposable cluster for the demo rather
+than trying to repair stale state.
+
+## Cleanup
+
+If you used kind:
+
+```sh
+kind delete cluster --name vault-lab
+```
+
+If you used another disposable Kubernetes cluster, delete the cluster or remove
+the demo resources using your normal cluster cleanup process.
+
+## Key takeaway
+
+The demo shows a secure pull-based metrics pattern:
+
+```text
+OTel collector -> Vault Agent token file -> Vault sys/metrics
+```
+
+The metrics endpoint remains protected. Access is granted through Kubernetes
+auth and a narrow Vault policy rather than through unauthenticated listener
+configuration.
