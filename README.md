@@ -155,14 +155,18 @@ receivers:
                 - vault.default.svc.cluster.local:8200
 ```
 
-## Prerequisites
+## Prepare for the demo
 
-- A disposable Kubernetes cluster.
+End-to-end checklist to go from a clean machine to "ready to present."
+
+### 1. Prerequisites
+
+- A disposable Kubernetes cluster (kind works well locally).
 - `kubectl` configured for that cluster.
-- Helm installed.
+- `helm` installed.
 - The HashiCorp Helm chart repository available.
 
-For a local demo, a fresh kind cluster works well:
+### 2. Bootstrap a fresh cluster
 
 ```sh
 kind create cluster --name vault-lab
@@ -171,25 +175,52 @@ helm repo add hashicorp https://helm.releases.hashicorp.com
 helm repo update
 ```
 
-## Run the demo setup
-
-Run the setup script from the repository root:
+### 3. Build the demo environment
 
 ```sh
-bash create_vault.sh
+make setup
 ```
 
-The script installs Vault, initialises and unseals it, configures Kubernetes
-auth, deploys the baseline secret demo, deploys the OTel metrics path, and runs
-two metrics checks.
+This runs `create_vault.sh`, which installs Vault and the Agent Injector,
+initialises and unseals Vault, configures Kubernetes auth, deploys the baseline
+secret demo, deploys the OTel metrics path, and runs two metrics checks. The
+script is idempotent — re-running it skips steps that are already done and
+re-injects the `vault-demo` sidecar.
 
-Successful setup ends with output similar to:
+A successful run ends with:
 
 ```text
 Unauthenticated sys/metrics HTTP status: 403
 # HELP vault_audit_log_request vault_audit_log_request
 OpenTelemetry collector is configured to scrape Vault sys/metrics with bearer_token_file=/vault/secrets/token.
 ```
+
+### 4. Pre-flight check
+
+Right before the customer joins:
+
+```sh
+make verify    # confirms the cluster is ready
+make status    # shows the demo resources
+```
+
+You're ready to present when all four pods report `2/2 Running`:
+
+```text
+default/vault-0
+default/vault-demo
+observability/otel-collector-...
+observability/vault-metrics-check
+```
+
+### 5. Optional polish
+
+- Open a second terminal with `kubectl get pods -A -w` for live visual feedback
+  during the talk.
+- If the cluster has been idle a while, re-run `make setup` — it's safe and
+  takes ~30s on an already-configured cluster.
+- For a totally fresh start: `kind delete cluster --name vault-lab` and return
+  to step 2.
 
 ## Presenter commands
 

@@ -55,6 +55,11 @@ POD=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=vault \
 echo "Wait for another 20 secs for things to be settled ..."
 sleep 20
 
+# Skip init/unseal if Vault is already initialized and unsealed
+if kubectl exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q 'Initialized.*true' \
+    && kubectl exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q 'Sealed.*false'; then
+  echo "Vault is already initialized and unsealed. Skipping init/unseal."
+else
 kubectl exec -i "$POD" -n "$NAMESPACE" -- sh <<'EOF'
 # Step 1: Initialize Vault and capture output
 VAULT_INIT_OUTPUT=$(vault operator init -key-shares=5 -key-threshold=3)
@@ -93,8 +98,14 @@ echo "$VAULT_INIT_OUTPUT" | awk '{
 
 echo "Vault initialized, unsealed, logged in and ready for use"
 EOF
+fi
 
-kubectl exec "$POD" -n "$NAMESPACE" -- vault audit enable file file_path=stdout
+# Enable audit device only if not already enabled
+if kubectl exec "$POD" -n "$NAMESPACE" -- vault audit list 2>/dev/null | grep -q '^file/'; then
+  echo "Audit device 'file' already enabled. Skipping."
+else
+  kubectl exec "$POD" -n "$NAMESPACE" -- vault audit enable file file_path=stdout
+fi
 
 kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
@@ -113,8 +124,20 @@ EOF
 
 sleep 5
 
-kubectl exec "$POD" -n "$NAMESPACE" -- vault auth enable kubernetes
-kubectl exec "$POD" -n "$NAMESPACE" -- vault secrets enable -path=kv-v2 kv-v2
+# Enable kubernetes auth only if not already enabled
+if kubectl exec "$POD" -n "$NAMESPACE" -- vault auth list 2>/dev/null | grep -q '^kubernetes/'; then
+  echo "Kubernetes auth method already enabled. Skipping."
+else
+  kubectl exec "$POD" -n "$NAMESPACE" -- vault auth enable kubernetes
+fi
+
+# Enable kv-v2 secrets engine only if not already enabled
+if kubectl exec "$POD" -n "$NAMESPACE" -- vault secrets list 2>/dev/null | grep -q '^kv-v2/'; then
+  echo "Secrets engine kv-v2 already enabled. Skipping."
+else
+  kubectl exec "$POD" -n "$NAMESPACE" -- vault secrets enable -path=kv-v2 kv-v2
+fi
+
 kubectl exec "$POD" -n "$NAMESPACE" -- vault kv put kv-v2/vault-demo/mysecret username=larry
 kubectl exec -i "$POD" -n "$NAMESPACE" -- vault policy write mysecret - <<EOF
 path "kv-v2/data/vault-demo/mysecret" {
@@ -174,6 +197,10 @@ kubectl exec "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/otel-vau
     bound_service_account_namespaces="$OBSERVABILITY_NAMESPACE" \
     policies=vault-metrics-read \
     ttl=1h
+
+# Recreate vault-demo pod so the Vault Agent sidecar is freshly injected
+# (the agent-injector mutating webhook only runs on pod CREATE, not UPDATE)
+kubectl delete pod vault-demo -n "$NAMESPACE" --ignore-not-found=true --wait=true
 
 kubectl apply -f - <<'EOF'
 # vault-demo.yaml
