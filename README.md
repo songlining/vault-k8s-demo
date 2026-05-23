@@ -30,34 +30,58 @@ dedicated Kubernetes service account.
 ## Demo architecture
 
 ```text
-                    Kubernetes cluster
-
-  observability namespace
-  -----------------------------------------------------------------
-  ServiceAccount: otel-collector
-          |
-          | Kubernetes service account JWT
-          v
-  Pod: otel-collector
-  +-------------------------------+      +-------------------------+
-  | OpenTelemetry collector       |      | Vault Agent sidecar     |
-  |                               |      |                         |
-  | Prometheus receiver           |      | Kubernetes auth login   |
-  | bearer_token_file:            |<-----| writes token to:        |
-  | /vault/secrets/token          |      | /vault/secrets/token    |
-  +-------------------------------+      +-------------------------+
-          |
-          | GET /v1/sys/metrics?format=prometheus
-          | X-Vault-Token: <token from file>
-          v
-  -----------------------------------------------------------------
-  default namespace
-
-  Vault server
-  - Kubernetes auth method enabled
-  - role: otel-vault-metrics
-  - policy: vault-metrics-read
+observability/otel-collector ServiceAccount
+        |
+        | (1) SA JWT
+        v
+┌─────────────────────────── Pod: otel-collector ───────────────────────────┐
+│                                                                           │
+│  ┌────────────────────────┐                                               │
+│  │ Vault Agent sidecar    │──(2) login with JWT──► Vault Kubernetes auth  │
+│  │ (container)            │                                  |            │
+│  └───────────┬────────────┘                                  | (3) verify │
+│              |                                               v            │
+│              | (4) writes Vault token to             Kubernetes           │
+│              |     /vault/secrets/token              TokenReview API      │
+│              v       (shared volume)                                      │
+│  ┌────────────────────────┐                                               │
+│  │ OpenTelemetry          │                                               │
+│  │ collector (container)  │                                               │
+│  └───────────┬────────────┘                                               │
+│              |                                                            │
+└──────────────┼────────────────────────────────────────────────────────────┘
+               |
+               └─(5) bearer token from /vault/secrets/token──► Vault /v1/sys/metrics
 ```
+
+Both containers run inside the **same pod** and share the `/vault/secrets/`
+volume. Vault Agent writes the token; the OTel collector reads it.
+
+The OTel collector never needs a hard-coded Vault token. Vault Agent obtains
+one at runtime by authenticating the pod's Kubernetes identity.
+
+### Step-by-step walkthrough
+
+1. **SA JWT (pod identity)** — The pod runs as the
+   `observability/otel-collector` ServiceAccount. Kubernetes automatically
+   projects a signed JSON Web Token for that ServiceAccount into the pod at
+   `/var/run/secrets/kubernetes.io/serviceaccount/token`. The token is signed
+   by the cluster's API server and carries claims like the namespace, service
+   account name, and pod UID. This is the pod's cluster-issued identity — no
+   static credentials required.
+2. **Login with JWT** — The Vault Agent sidecar reads that JWT and sends it
+   to Vault's Kubernetes auth method (`auth/kubernetes/login`) along with the
+   role name `otel-vault-metrics`.
+3. **Verify JWT** — Vault calls the Kubernetes TokenReview API to confirm
+   the JWT is valid and belongs to the expected ServiceAccount. It then
+   checks the role's `bound_service_account_names` and
+   `bound_service_account_namespaces` constraints.
+4. **Write Vault token** — On success, Vault issues a short-lived token
+   carrying the `vault-metrics-read` policy. Vault Agent writes it to
+   `/vault/secrets/token` on the shared volume and renews it before expiry.
+5. **Authenticated scrape** — The OTel collector container reads the token
+   from the same shared volume (via `bearer_token_file`) and uses it as the
+   `X-Vault-Token` when scraping `/v1/sys/metrics?format=prometheus`.
 
 ## Resources created by the script
 
