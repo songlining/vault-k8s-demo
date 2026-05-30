@@ -252,15 +252,19 @@ The repository includes a guided demo driver so the live demo is easier to run
 than copying commands one by one.
 
 ```sh
-make help      # Show available commands
-make verify    # Check the cluster is ready for the demo
-make demo      # Start the guided live demo flow
-make status    # Show the Kubernetes resources used by the demo
+make help        # Show available commands
+make verify      # Check the cluster is ready for the demo
+make demo        # Start the guided live demo flow
+make status      # Show the Kubernetes resources used by the demo
+make vso-verify  # Check the Vault Secrets Operator demo is ready
+make vso-demo    # Start the guided VSO walkthrough
+make vso-status  # Show the VSO demo resources
 ```
 
 Use `make demo` for the customer walkthrough. It pauses between sections and
 prints each command before running it, so the audience can follow both the story
-and the proof points.
+and the proof points. `make vso-demo` drives the separate Vault Secrets Operator
+walkthrough the same way.
 
 ## Live demo flow
 
