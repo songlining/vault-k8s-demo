@@ -407,6 +407,150 @@ kubectl exec vault-demo -c vault-demo -- cat /vault/secrets/mysecret
 This is separate from the OTel metrics path. It is included as a simple baseline
 to show the Kubernetes auth flow before the metrics-specific example.
 
+## Vault Secrets Operator (VSO) demo
+
+This is a third, standalone demo (`make vso-demo`) that showcases a different
+secret-delivery model from the Agent Injector used above.
+
+Where the Agent Injector runs a **per-pod sidecar** that writes a secret to a
+**file** inside one pod, the **Vault Secrets Operator** runs a single
+**cluster-wide operator** that syncs Vault secrets into **native Kubernetes
+`Secret` objects** via CRDs. Any workload then consumes those secrets the
+standard Kubernetes way (`envFrom`, `secretKeyRef`, volume mounts) with **no
+Vault annotations and no sidecar**.
+
+### What the VSO demo proves
+
+- The Vault Secrets Operator runs once, cluster-wide.
+- Three CRDs declaratively describe the pipeline:
+  `VaultConnection` → `VaultAuth` → `VaultStaticSecret`.
+- A Vault KV secret (`kv-v2/vault-demo/mysecret`) is materialized as a native
+  Kubernetes `Secret` (`vso-demo/vso-demo-mysecret`).
+- A plain pod consumes it through `envFrom` with **zero** Vault configuration
+  (the pod is `1/1`, not `2/2`, and carries no `vault.hashicorp.com`
+  annotations).
+- VSO authenticates with a least-privilege identity: the dedicated `vso-demo`
+  Kubernetes auth role bound only to the `vso-demo/vso-demo` service account,
+  using the existing `mysecret` policy.
+- **Live rotation**: changing the value in Vault refreshes the Kubernetes
+  `Secret` automatically (within `refreshAfter`, set to 30s).
+
+### Agent Injector vs Vault Secrets Operator
+
+| Aspect | Agent Injector (sidecar / OTel demos) | Vault Secrets Operator (this demo) |
+| --- | --- | --- |
+| Unit of deployment | Sidecar container per annotated pod | One operator Deployment per cluster |
+| Where the secret lands | A file inside the pod (`/vault/secrets/...`) | A native Kubernetes `Secret` object |
+| App consumption | Reads a file | Standard `envFrom` / `secretKeyRef` / volume |
+| Coupling to Vault | Pod needs Vault annotations | App needs **zero** Vault knowledge |
+| Config mechanism | Pod annotations | Kubernetes CRDs |
+| Pod shape | `2/2` (app + Vault Agent) | `1/1` (app only) |
+
+### VSO architecture
+
+```text
+                      Vault (default/vault-0)
+                        auth/kubernetes ── role: vso-demo ── policy: mysecret
+                        kv-v2/vault-demo/mysecret
+                                  ^
+                                  | (3) login with SA JWT + read secret
+                                  |
+   vault-secrets-operator-system  |
+        VSO controller ───reconcile loop
+                                  |
+   vso-demo namespace             |
+        VaultConnection ─► VaultAuth ─► VaultStaticSecret
+                                            |
+                                            | (4) writes / refreshes
+                                            v
+                            Kubernetes Secret: vso-demo-mysecret
+                                            |
+                                            | (5) envFrom (standard K8s)
+                                            v
+                            Plain app pod: vso-demo-app (no Vault config)
+```
+
+### Resources created for the VSO demo
+
+`create_vault.sh` also provisions the VSO path (additive and idempotent):
+
+| Resource | Purpose |
+| --- | --- |
+| `vault-secrets-operator` Helm release (chart `1.4.0`) | Runs the operator in `vault-secrets-operator-system`. |
+| `vso-demo` namespace and service account | Dedicated identity VSO authenticates as. |
+| `vso-demo` Kubernetes auth role | Binds `vso-demo/vso-demo` to the `mysecret` policy. |
+| `VaultConnection/vso-demo-connection` | How VSO reaches Vault (in-cluster URL). |
+| `VaultAuth/vso-demo-auth` | Reuses the `kubernetes` auth method with role `vso-demo`. |
+| `VaultStaticSecret/vso-demo-mysecret` | Syncs `kv-v2/vault-demo/mysecret` → native Secret. |
+| `vso-demo/vso-demo-mysecret` Secret | The materialized native Kubernetes Secret. |
+| `vso-demo/vso-demo-app` pod | Plain consumer using `envFrom` (no Vault config). |
+
+### Key VSO manifests
+
+`VaultStaticSecret` ties it all together:
+
+```yaml
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: vso-demo-mysecret
+  namespace: vso-demo
+spec:
+  vaultAuthRef: vso-demo-auth
+  mount: kv-v2
+  type: kv-v2
+  path: vault-demo/mysecret
+  refreshAfter: 30s
+  destination:
+    name: vso-demo-mysecret
+    create: true
+```
+
+The consuming pod is pure Kubernetes — note the absence of any Vault annotations:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vso-demo-app
+  namespace: vso-demo
+spec:
+  serviceAccountName: vso-demo
+  containers:
+    - name: app
+      image: badouralix/curl-jq
+      command: ["sh", "-c", "sleep infinity"]
+      envFrom:
+        - secretRef:
+            name: vso-demo-mysecret
+```
+
+### Run the VSO demo
+
+The VSO path is provisioned by the same `make setup` (it is folded into
+`create_vault.sh`). Once setup has completed:
+
+```sh
+make vso-verify    # Confirm the operator, CRDs, synced Secret, and app pod
+make vso-demo      # Start the guided VSO walkthrough
+make vso-status    # Show the VSO demo resources
+```
+
+`make vso-demo` walks through nine sections, pausing between each: intro,
+architecture, operator running, the CRDs, the synced native Secret, the plain
+app consuming it, the least-privilege identity, a **live rotation**, and a
+summary. Set `NO_WAIT=true` to run it without pauses (useful for a dry run):
+
+```sh
+NO_WAIT=true make vso-demo
+```
+
+A successful `make setup` ends the VSO block with:
+
+```text
+Vault Secrets Operator demo is ready: kv-v2/vault-demo/mysecret is synced to native Secret vso-demo/vso-demo-mysecret.
+```
+
 ## Troubleshooting
 
 ### OTel or check pod is not `2/2 Running`
@@ -456,9 +600,65 @@ otel-collector
 
 ### Vault is sealed
 
-This demo script initialises and unseals Vault during setup. If you reuse an old
-cluster and Vault is sealed, use a fresh disposable cluster for the demo rather
-than trying to repair stale state.
+This demo script initialises and unseals Vault during setup. On first run it
+saves the unseal keys and root token to `vault-init-keys.json` (gitignored,
+`chmod 600`, demo-only).
+
+If the Vault pod restarts and comes back **sealed**, just re-run `make setup`.
+The script detects the "initialized but sealed" state and automatically unseals
+Vault from `vault-init-keys.json` — no cluster rebuild required.
+
+If that file is missing (for example, the cluster was created by an older
+version of the script that did not persist keys), the keys are unrecoverable.
+Use a fresh disposable cluster:
+
+```sh
+kind delete cluster --name vault-lab
+kind create cluster --name vault-lab
+helm repo add hashicorp https://helm.releases.hashicorp.com && helm repo update
+make setup
+```
+
+> **Note:** `vault-init-keys.json` contains the root token and unseal keys in
+> plaintext. It is fine for a disposable demo cluster but must never be used for
+> anything real or committed to git.
+
+### VSO Secret never appears (`vso-demo-mysecret`)
+
+Check the `VaultStaticSecret` status and the operator logs:
+
+```sh
+kubectl describe vaultstaticsecret vso-demo-mysecret -n vso-demo
+kubectl logs -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator --tail=80
+```
+
+Common causes:
+
+- The `vso-demo` Kubernetes auth role is missing or not bound to the
+  `vso-demo/vso-demo` service account. Confirm with:
+
+  ```sh
+  kubectl exec vault-0 -- vault read auth/kubernetes/role/vso-demo
+  ```
+
+- The `mysecret` policy does not grant read on
+  `kv-v2/data/vault-demo/mysecret`.
+
+### VSO rotation does not update the Secret
+
+The `VaultStaticSecret` uses `refreshAfter: 30s`, so allow up to ~30 seconds.
+Force a faster check by inspecting the operator logs or re-reading the Secret:
+
+```sh
+kubectl get secret vso-demo-mysecret -n vso-demo \
+  -o jsonpath='{.data.username}' | base64 -d; echo
+```
+
+If a previous run left the value as `larry-rotated`, re-seed it:
+
+```sh
+kubectl exec vault-0 -- vault kv put kv-v2/vault-demo/mysecret username=larry
+```
 
 ## Cleanup
 

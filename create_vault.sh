@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # inspired by https://www.youtube.com/watch?v=HHZO4_-GRYs
 
+# Host-side tools required by this script.
+for _cmd in kubectl helm jq; do
+  if ! command -v "$_cmd" >/dev/null 2>&1; then
+    echo "ERROR: required command '$_cmd' not found on PATH." >&2
+    exit 1
+  fi
+done
+
 helm upgrade --install vault hashicorp/vault \
   --create-namespace \
   -f - <<'EOF'
@@ -34,6 +42,9 @@ EOF
 # Wait for Vault pod to be ready
 NAMESPACE="default"
 OBSERVABILITY_NAMESPACE="observability"
+VSO_NAMESPACE="vso-demo"
+VSO_OPERATOR_NAMESPACE="vault-secrets-operator-system"
+VSO_CHART_VERSION="1.4.0"
 VAULT_SERVICE_ACCOUNT="vault"
 echo "Waiting for Vault pod to be ready..."
 while : ; do
@@ -56,48 +67,58 @@ echo "Wait for another 20 secs for things to be settled ..."
 sleep 20
 
 # Skip init/unseal if Vault is already initialized and unsealed
+KEYS_FILE="${KEYS_FILE:-vault-init-keys.json}"
+
+unseal_from_file() {
+  # Unseal the Vault pod using keys saved in $KEYS_FILE on the host.
+  if [ ! -f "$KEYS_FILE" ]; then
+    return 1
+  fi
+  local i
+  for i in 0 1 2; do
+    key=$(jq -r ".unseal_keys_b64[$i]" "$KEYS_FILE")
+    if [ -z "$key" ] || [ "$key" = "null" ]; then
+      return 1
+    fi
+    kubectl exec "$POD" -n "$NAMESPACE" -- vault operator unseal "$key" >/dev/null
+  done
+  return 0
+}
+
 if kubectl exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q 'Initialized.*true' \
     && kubectl exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q 'Sealed.*false'; then
   echo "Vault is already initialized and unsealed. Skipping init/unseal."
+elif kubectl exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q 'Initialized.*true'; then
+  # Initialized but sealed (e.g. the pod restarted). Recover from saved keys.
+  echo "Vault is initialized but sealed. Attempting to unseal from ${KEYS_FILE}..."
+  if unseal_from_file; then
+    echo "Vault unsealed from saved keys in ${KEYS_FILE}."
+  else
+    echo "ERROR: Vault is sealed and no usable unseal keys were found in ${KEYS_FILE}." >&2
+    echo "Cannot recover this Vault. Recreate the cluster for a clean demo:" >&2
+    echo "  kind delete cluster --name vault-lab && kind create cluster --name vault-lab" >&2
+    echo "  helm repo add hashicorp https://helm.releases.hashicorp.com && helm repo update" >&2
+    echo "  make setup" >&2
+    exit 1
+  fi
 else
-kubectl exec -i "$POD" -n "$NAMESPACE" -- sh <<'EOF'
-# Step 1: Initialize Vault and capture output
-VAULT_INIT_OUTPUT=$(vault operator init -key-shares=5 -key-threshold=3)
+  # Fresh Vault: initialize, persist keys to a gitignored host file, then unseal.
+  echo "Initializing Vault and saving unseal keys to ${KEYS_FILE}..."
+  kubectl exec "$POD" -n "$NAMESPACE" -- \
+    vault operator init -key-shares=5 -key-threshold=3 -format=json > "$KEYS_FILE"
+  chmod 600 "$KEYS_FILE"
 
-# Step 2: Split output into lines and parse keys/token
-echo "$VAULT_INIT_OUTPUT" | awk '{
-    gsub(/Unseal Key [0-9]+: |Initial Root Token: /, "\n&")
-    sub(/^\n/, "")
-    print
-}' | {
-    while IFS= read -r line; do
-        case $line in
-            "Unseal Key"*)
-                key=$(echo "$line" | awk '{print $4}')
-                # Store keys sequentially
-                case $line in
-                    *"1:"*) key1=$key ;;
-                    *"2:"*) key2=$key ;;
-                    *"3:"*) key3=$key ;;
-                esac
-                ;;
-            "Initial Root Token"*)
-                root_token=$(echo "$line" | awk '{print $4}')
-                ;;
-        esac
-    done
+  if ! unseal_from_file; then
+    echo "ERROR: failed to unseal Vault from freshly written ${KEYS_FILE}." >&2
+    exit 1
+  fi
 
-    # Step 3: Unseal with first three keys
-    vault operator unseal "$key1"
-    vault operator unseal "$key2"
-    vault operator unseal "$key3"
+  # Login with the root token without printing it to the terminal.
+  ROOT_TOKEN=$(jq -r '.root_token' "$KEYS_FILE")
+  kubectl exec "$POD" -n "$NAMESPACE" -- vault login -no-print "$ROOT_TOKEN"
 
-    # Step 4: Login with root token without printing it to the terminal
-    vault login -no-print "$root_token"
-}
-
-echo "Vault initialized, unsealed, logged in and ready for use"
-EOF
+  echo "Vault initialized, unsealed, logged in and ready for use."
+  echo "Unseal keys and root token saved to ${KEYS_FILE} (gitignored). Keep this file safe; it is demo-only."
 fi
 
 # Enable audit device only if not already enabled
@@ -370,3 +391,143 @@ if ! kubectl exec -n "$OBSERVABILITY_NAMESPACE" vault-metrics-check -c vault-met
 fi
 
 echo "OpenTelemetry collector is configured to scrape Vault sys/metrics with bearer_token_file=/vault/secrets/token."
+
+# ============================================================================
+# Vault Secrets Operator (VSO) demo path
+# ----------------------------------------------------------------------------
+# Additive and idempotent. VSO runs a cluster-wide operator that syncs Vault
+# secrets into native Kubernetes Secret objects via CRDs, instead of injecting a
+# per-pod Agent sidecar that writes a file. This block:
+#   - installs VSO via Helm (pinned chart version)
+#   - creates the vso-demo namespace + service account
+#   - reuses the existing kubernetes auth method with a dedicated vso-demo role
+#   - applies VaultConnection / VaultAuth / VaultStaticSecret CRDs
+#   - deploys a plain consuming pod (no Vault annotations, no sidecar)
+#   - asserts the native Secret materialized
+# ============================================================================
+
+echo ""
+echo "=== Configuring the Vault Secrets Operator (VSO) demo path ==="
+
+# Re-seed the demo secret to a known starting value so the rotation demo is
+# repeatable (the vso-demo.sh rotation section also resets this at the end).
+kubectl exec "$POD" -n "$NAMESPACE" -- vault kv put kv-v2/vault-demo/mysecret username=larry >/dev/null
+
+# Dedicated Kubernetes auth role for VSO. Reuses the existing 'mysecret' policy
+# (read on kv-v2/data/vault-demo/mysecret) but binds a distinct, auditable
+# identity: the vso-demo service account in the vso-demo namespace.
+kubectl exec "$POD" -n "$NAMESPACE" -- vault write auth/kubernetes/role/vso-demo \
+    alias_name_source=serviceaccount_name \
+    bound_service_account_names=vso-demo \
+    bound_service_account_namespaces="$VSO_NAMESPACE" \
+    policies=default,mysecret \
+    ttl=1h
+
+# Install the Vault Secrets Operator (idempotent; pinned chart version).
+helm upgrade --install vault-secrets-operator hashicorp/vault-secrets-operator \
+  --namespace "$VSO_OPERATOR_NAMESPACE" \
+  --create-namespace \
+  --version "$VSO_CHART_VERSION"
+
+echo "Waiting for the Vault Secrets Operator to be available..."
+kubectl wait -n "$VSO_OPERATOR_NAMESPACE" \
+  --for=condition=Available deployment \
+  -l app.kubernetes.io/name=vault-secrets-operator --timeout=180s
+
+# Namespace + service account that VSO authenticates as.
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${VSO_NAMESPACE}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vso-demo
+  namespace: ${VSO_NAMESPACE}
+EOF
+
+# VSO CRDs: how to reach Vault, how to authenticate, and what to sync.
+kubectl apply -f - <<EOF
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: vso-demo-connection
+  namespace: ${VSO_NAMESPACE}
+spec:
+  address: http://vault.${NAMESPACE}.svc.cluster.local:8200
+  skipTLSVerify: true
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vso-demo-auth
+  namespace: ${VSO_NAMESPACE}
+spec:
+  vaultConnectionRef: vso-demo-connection
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: vso-demo
+    serviceAccount: vso-demo
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: vso-demo-mysecret
+  namespace: ${VSO_NAMESPACE}
+spec:
+  vaultAuthRef: vso-demo-auth
+  mount: kv-v2
+  type: kv-v2
+  path: vault-demo/mysecret
+  refreshAfter: 30s
+  destination:
+    name: vso-demo-mysecret
+    create: true
+EOF
+
+# Plain consuming pod: standard envFrom, zero Vault annotations, no sidecar.
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vso-demo-app
+  namespace: ${VSO_NAMESPACE}
+spec:
+  serviceAccountName: vso-demo
+  restartPolicy: OnFailure
+  containers:
+    - name: app
+      image: badouralix/curl-jq
+      command: ["sh", "-c", "sleep infinity"]
+      resources: {}
+      envFrom:
+        - secretRef:
+            name: vso-demo-mysecret
+EOF
+
+# Assert the native Secret materialized from Vault.
+echo "Waiting for VSO to materialize the native Kubernetes Secret..."
+VSO_SYNCED="false"
+for _ in $(seq 1 30); do
+  VSO_VALUE=$(kubectl get secret vso-demo-mysecret -n "$VSO_NAMESPACE" \
+    -o jsonpath='{.data.username}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  if [ "$VSO_VALUE" = "larry" ]; then
+    VSO_SYNCED="true"
+    break
+  fi
+  sleep 3
+done
+
+if [ "$VSO_SYNCED" != "true" ]; then
+  echo "ERROR: VSO did not materialize secret vso-demo-mysecret with username=larry."
+  echo "Inspect with: kubectl describe vaultstaticsecret vso-demo-mysecret -n ${VSO_NAMESPACE}"
+  exit 1
+fi
+
+echo "Waiting for the VSO consuming pod to be ready..."
+kubectl wait -n "$VSO_NAMESPACE" --for=condition=Ready pod/vso-demo-app --timeout=180s
+
+echo "Vault Secrets Operator demo is ready: kv-v2/vault-demo/mysecret is synced to native Secret vso-demo/vso-demo-mysecret."

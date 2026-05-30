@@ -1,4 +1,4 @@
-.PHONY: help setup demo verify status logs-otel logs-agent
+.PHONY: help setup demo verify status logs-otel logs-agent vso-demo vso-verify vso-status logs-vso
 .DEFAULT_GOAL := help
 
 help: ## Show available demo commands
@@ -10,6 +10,9 @@ setup: ## Run the full Vault Kubernetes setup script on the current cluster
 
 demo: ## Run the guided live demo flow
 	@bash demo.sh
+
+vso-demo: ## Run the guided Vault Secrets Operator (VSO) demo flow
+	@bash vso-demo.sh
 
 verify: ## Verify the demo environment is ready
 	@echo "Current context:"
@@ -37,3 +40,29 @@ logs-otel: ## Show recent OpenTelemetry collector logs
 
 logs-agent: ## Show recent Vault Agent sidecar logs from the OTel collector pod
 	@kubectl logs -n observability deployment/otel-collector -c vault-agent --tail=80
+
+vso-verify: ## Verify the Vault Secrets Operator demo environment is ready
+	@echo "Vault Secrets Operator deployment:"
+	@kubectl get deploy -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator
+	@echo ""
+	@echo "VSO demo namespace pods:"
+	@kubectl get pods -n vso-demo
+	@echo ""
+	@echo "VaultStaticSecret status:"
+	@kubectl get vaultstaticsecret vso-demo-mysecret -n vso-demo
+	@echo ""
+	@echo "Synced native Secret value (username):"
+	@kubectl get secret vso-demo-mysecret -n vso-demo -o jsonpath='{.data.username}' | base64 -d; echo
+	@echo ""
+	@echo "App pod reads it via envFrom (should match the value above):"
+	@kubectl exec vso-demo-app -n vso-demo -- printenv username
+
+vso-status: ## Show Kubernetes resources used by the VSO demo
+	@kubectl get pods,secret,serviceaccount -n vso-demo
+	@echo ""
+	@kubectl get vaultconnection,vaultauth,vaultstaticsecret -n vso-demo
+	@echo ""
+	@kubectl get pods,deploy -n vault-secrets-operator-system
+
+logs-vso: ## Show recent Vault Secrets Operator controller logs
+	@kubectl logs -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator --tail=80
