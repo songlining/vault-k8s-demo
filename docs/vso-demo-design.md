@@ -292,7 +292,7 @@ A new guided script that **reuses the existing helper conventions** from
 | 4 | Show the synced native Secret | `kubectl get secret vso-demo-mysecret -n vso-demo -o jsonpath` → decode `username=larry`. |
 | 5 | Plain app consumes it | `kubectl exec vso-demo-app -- printenv username` → `larry`, with no Vault annotations on the pod (`kubectl get pod vso-demo-app -o yaml \| grep -c vault.hashicorp.com` → 0). |
 | 6 | Least-privilege identity | `kubectl exec vault-0 -- vault read auth/kubernetes/role/vso-demo` → bound to `vso-demo/vso-demo`, policy `mysecret`. |
-| 7 | **Live rotation** | `vault kv put kv-v2/vault-demo/mysecret username=larry-rotated`, wait ≤ `refreshAfter`, re-read the K8s Secret → value changed automatically. |
+| 7 | **Live rotation** | `vault kv put kv-v2/vault-demo/mysecret username=larry-rotated-1`, wait ≤ `refreshAfter`, re-read the K8s Secret → value changed automatically. |
 | 8 | Summary | What we proved; contrast table; follow-up commands. |
 
 ### Rotation section detail (the highlight)
@@ -304,12 +304,12 @@ kubectl get secret vso-demo-mysecret -n vso-demo \
 
 # Change it in Vault
 kubectl exec vault-0 -n default -- \
-  vault kv put kv-v2/vault-demo/mysecret username=larry-rotated
+  vault kv put kv-v2/vault-demo/mysecret username=larry-rotated-1
 
 # Wait for VSO to reconcile (refreshAfter=30s); poll the Secret
 # Demo script polls up to ~45s and prints when the value flips.
 kubectl get secret vso-demo-mysecret -n vso-demo \
-  -o jsonpath='{.data.username}' | base64 -d   # -> larry-rotated
+  -o jsonpath='{.data.username}' | base64 -d   # -> larry-rotated-1
 ```
 
 To keep the demo re-runnable, the script **resets the secret back to `larry`**
@@ -406,7 +406,7 @@ No existing demo files' behavior changes; all edits are additive.
 | --- | --- |
 | VSO chart/CRD API version drift (`v1beta1`) | Pin the chart version; verify CRD `apiVersion` against the installed chart during implementation. |
 | Rotation wait causes dead air in live demo | `refreshAfter: 30s` + a polling loop that prints progress; `NO_WAIT` for dry runs. |
-| Re-runs leave the secret in `larry-rotated` state | Setup re-seeds to `larry`; rotation section resets at the end. |
+| Re-runs leave the secret in `larry-rotated-N` state | Setup re-seeds to `larry`; rotation section resets at the end. |
 | Confusion with the Agent Injector demos | Standalone narrative + explicit contrast table in §3 and the summary. |
 | `vault.default.svc.cluster.local` address assumes default ns | Matches existing scripts' assumption; parameterized via the same `NAMESPACE` convention. |
 | Operator namespace name varies by chart version | Use the chart's documented default (`vault-secrets-operator-system`) and discover the deployment label at implementation time. |

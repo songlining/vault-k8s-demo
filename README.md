@@ -658,11 +658,19 @@ kubectl get secret vso-demo-mysecret -n vso-demo \
   -o jsonpath='{.data.username}' | base64 -d; echo
 ```
 
-If a previous run left the value as `larry-rotated`, re-seed it:
+If a previous run left the value as `larry-rotated-N`, re-seed it:
 
 ```sh
 kubectl exec vault-0 -- vault kv put kv-v2/vault-demo/mysecret username=larry
 ```
+
+### App pod value does not match the Secret after rotation
+
+The `vso-demo-app` pod consumes the Secret through `envFrom`, so its environment
+variables are captured when the pod starts. VSO refreshes the Kubernetes Secret
+object after Vault changes; it does not mutate environment variables inside an
+already-running process. Recreate the pod after the Secret syncs if you need the
+process environment to pick up the latest value.
 
 ## Cleanup
 

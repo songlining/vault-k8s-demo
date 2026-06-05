@@ -54,7 +54,7 @@ vso-verify: ## Verify the Vault Secrets Operator demo environment is ready
 	@echo "Synced native Secret value (username):"
 	@kubectl get secret vso-demo-mysecret -n vso-demo -o jsonpath='{.data.username}' | base64 -d; echo
 	@echo ""
-	@echo "App pod reads it via envFrom (should match the value above):"
+	@echo "App pod envFrom value captured at pod start (existing env vars do not live-update):"
 	@kubectl exec vso-demo-app -n vso-demo -- printenv username
 
 vso-status: ## Show Kubernetes resources used by the VSO demo

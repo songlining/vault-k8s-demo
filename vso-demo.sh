@@ -6,6 +6,10 @@ VSO_NAMESPACE="${VSO_NAMESPACE:-vso-demo}"
 VSO_OPERATOR_NAMESPACE="${VSO_OPERATOR_NAMESPACE:-vault-secrets-operator-system}"
 SECRET_NAME="${SECRET_NAME:-vso-demo-mysecret}"
 APP_POD="${APP_POD:-vso-demo-app}"
+BASELINE_USERNAME="${BASELINE_USERNAME:-larry}"
+ROTATION_NUMBER="${ROTATION_NUMBER:-1}"
+ROTATED_USERNAME="${ROTATED_USERNAME:-${BASELINE_USERNAME}-rotated-${ROTATION_NUMBER}}"
+SYNC_ATTEMPTS="${SYNC_ATTEMPTS:-20}"
 NO_WAIT="${NO_WAIT:-false}"
 
 if [ -t 1 ]; then
@@ -104,29 +108,100 @@ INTRO
 pause
 
 section "1. Architecture: how VSO delivers secrets"
-cat <<'ARCH'
-                      Vault (default/vault-0)
-                        auth/kubernetes ── role: vso-demo ── policy: mysecret
-                        kv-v2/vault-demo/mysecret
-                                  ^
-                                  | (3) login with SA JWT + read secret
-                                  |
-   vault-secrets-operator-system  |
-        VSO controller ───reconcile loop
-                                  |
-   vso-demo namespace             |
-        VaultConnection ─► VaultAuth ─► VaultStaticSecret
-                                            |
-                                            | (4) writes / refreshes
-                                            v
-                            Kubernetes Secret: vso-demo-mysecret
-                                            |
-                                            | (5) envFrom (standard K8s)
-                                            v
-                            Plain app pod: vso-demo-app (no Vault config)
+cat <<'OVERVIEW'
+High-level concept
+──────────────────
+The Vault Secrets Operator (VSO) is a Kubernetes operator that runs ONCE per
+cluster. It watches custom resources (CRDs) you define, logs into Vault on your
+behalf, and syncs Vault secrets into native Kubernetes Secret objects.
 
-Unlike the Agent Injector (a sidecar that writes a file into one pod), VSO runs
-once per cluster and turns Vault secrets into first-class Kubernetes Secrets.
+Your application never talks to Vault. It just reads a normal Kubernetes Secret
+the same way it always has — via envFrom, secretKeyRef, or a volume mount.
+OVERVIEW
+
+cat <<'DIAGRAM'
+  ┌─────────────────────────────────────────────┐
+  │            Kubernetes Cluster               │
+  │                                             │
+  │  ┌─────────────────────────────────────┐    │
+  │  │  vault-secrets-operator-system      │    │
+  │  │  ┌──────────────────────────────┐   │    │
+  │  │  │   VSO Controller (operator)  │   │    │
+  │  │  └──────────────────────────────┘   │    │
+  │  └──────────────┬──────────────────────┘    │
+  │                 │ watches / reconciles      │
+  │  ┌──────────────▼──────────────────────┐    │
+  │  │  vso-demo namespace                 │    │
+  │  │  ┌────────────┐ ┌────────────┐      │    │
+  │  │  │VaultConn.  │ │ VaultAuth  │  CRDs│    │
+  │  │  └────────────┘ └────────────┘      │    │
+  │  │  ┌──────────────────────────────┐   │    │
+  │  │  │    VaultStaticSecret (CRD)   │   │    │
+  │  │  └──────────────────────────────┘   │    │
+  │  │         │ syncs into                │    │
+  │  │  ┌──────▼───────────────────────┐   │    │
+  │  │  │  K8s Secret: vso-demo-       │   │    │
+  │  │  │             mysecret         │   │    │
+  │  │  └──────────────────────────────┘   │    │
+  │  │         │ envFrom (standard K8s)    │    │
+  │  │  ┌──────▼───────────────────────┐   │    │
+  │  │  │  App Pod: vso-demo-app       │   │    │
+  │  │  │  (no Vault config at all)    │   │    │
+  │  │  └──────────────────────────────┘   │    │
+  │  └─────────────────────────────────────┘    │
+  │                                             │
+  │  ┌─────────────────────────────────────┐    │
+  │  │  default namespace                  │    │
+  │  │  ┌──────────────────────────────┐   │    │
+  │  │  │  Vault (vault-0)             │   │    │
+  │  │  │  auth/kubernetes             │   │    │
+  │  │  │  kv-v2/vault-demo/mysecret   │   │    │
+  │  │  └──────────────────────────────┘   │    │
+  │  └─────────────────────────────────────┘    │
+  └─────────────────────────────────────────────┘
+DIAGRAM
+pause
+
+section "1b. Step-by-step flow"
+cat <<'ARCH'
+  ┌─────────────────────────────────────────────────────────────┐
+  │ vso-demo namespace                                          │
+  │  VaultConnection ──► VaultAuth ──► VaultStaticSecret (CRDs) │
+  └──────────────────────────┬──────────────────────────────────┘
+                             │
+                (1) VSO controller watches these CRDs
+                             │
+  ┌──────────────────────────▼──────────────────────────────────┐
+  │ vault-secrets-operator-system                               │
+  │  VSO Controller                                             │
+  └──────────────────────────┬──────────────────────────────────┘
+                             │
+             (2) login with vso-demo SA JWT + read secret
+                             │
+  ┌──────────────────────────▼──────────────────────────────────┐
+  │ default namespace                                           │
+  │  Vault (vault-0)                                            │
+  │    auth/kubernetes ── role: vso-demo ── policy: mysecret    │
+  │    kv-v2/vault-demo/mysecret                                │
+  └──────────────────────────┬──────────────────────────────────┘
+                             │
+                  (3) writes / refreshes every 30s
+                             │
+  ┌──────────────────────────▼──────────────────────────────────┐
+  │ vso-demo namespace                                          │
+  │  Kubernetes Secret: vso-demo-mysecret                       │
+  └──────────────────────────┬──────────────────────────────────┘
+                             │
+               (4) envFrom — standard Kubernetes API
+                             │
+  ┌──────────────────────────▼──────────────────────────────────┐
+  │ vso-demo namespace                                          │
+  │  App Pod: vso-demo-app  (no Vault annotations, no sidecar)  │
+  └─────────────────────────────────────────────────────────────┘
+
+Unlike the Agent Injector (a sidecar per pod that writes a file),
+VSO runs once per cluster and turns Vault secrets into first-class
+Kubernetes Secrets any app can consume with zero Vault knowledge.
 ARCH
 pause
 
@@ -143,6 +218,21 @@ pause
 
 section "3. The CRDs that drive the sync"
 p "Three declarative objects describe the whole pipeline"
+cat <<'MODEL'
+  ┌──────────────────┬──────────────┬────────────────────────┐
+  │ VaultConnection  │ VaultAuth    │ VaultStaticSecret      │
+  ├──────────────────┼──────────────┼────────────────────────┤
+  │ Where is Vault?  │ How login?   │ What secret to sync?   │
+  └──────────────────┴──────────────┴────────────────────────┘
+
+Other VSO secret CRDs you can use:
+  - VaultDynamicSecret: dynamic leased credentials, such as database users.
+  - VaultPKISecret: issued and renewed certificates from Vault PKI.
+  - HCPVaultSecretsApp: sync from HCP Vault Secrets instead of self-managed Vault.
+
+This demo uses VaultStaticSecret because the source is an existing KV secret.
+
+MODEL
 pe "kubectl get vaultconnection,vaultauth,vaultstaticsecret -n ${VSO_NAMESPACE}"
 
 p "The VaultStaticSecret declares the Vault path and the destination Secret"
@@ -172,7 +262,7 @@ POINTS
 pause
 
 section "5. A plain pod consumes it with zero Vault config"
-p "The app reads the secret through standard envFrom"
+p "The app reads the secret through standard envFrom at pod start"
 pe "kubectl exec ${APP_POD} -n ${VSO_NAMESPACE} -- printenv username"
 
 p "The consuming pod has NO Vault annotations and NO sidecar (count should be 0)"
@@ -184,6 +274,8 @@ pe "kubectl get pod ${APP_POD} -n ${VSO_NAMESPACE}"
 cat <<'POINTS'
 Key points:
   - The application is completely Vault-agnostic.
+  - Kubernetes envFrom values are captured when a pod starts; later Secret
+    refreshes update the Secret object, not the existing process environment.
   - Contrast with the Agent Injector demo, where pods are 2/2 and carry
     vault.hashicorp.com annotations.
 POINTS
@@ -204,17 +296,26 @@ POINTS
 pause
 
 section "7. Live rotation: change Vault, watch the Secret update"
+p "Seed Vault with the original value so rotation starts from a known baseline"
+pe "kubectl exec vault-0 -n ${NAMESPACE} -- vault kv put kv-v2/vault-demo/mysecret username=${BASELINE_USERNAME}"
+
+p "Wait for VSO to sync the baseline value into the Kubernetes Secret"
+pe "for i in \$(seq 1 ${SYNC_ATTEMPTS}); do v=\$(kubectl get secret ${SECRET_NAME} -n ${VSO_NAMESPACE} -o jsonpath='{.data.username}' | base64 -d); echo \"  attempt \$i: \$v\"; if [ \"\$v\" = \"${BASELINE_USERNAME}\" ]; then echo '  -> Secret synced to baseline by VSO'; exit 0; fi; sleep 3; done; echo 'ERROR: Secret did not sync to ${BASELINE_USERNAME}' >&2; exit 1"
+
 p "Current value in the native Kubernetes Secret"
 pe "kubectl get secret ${SECRET_NAME} -n ${VSO_NAMESPACE} -o jsonpath='{.data.username}' | base64 -d; echo"
 
 p "Update the value in Vault"
-pe "kubectl exec vault-0 -n ${NAMESPACE} -- vault kv put kv-v2/vault-demo/mysecret username=larry-rotated"
+pe "kubectl exec vault-0 -n ${NAMESPACE} -- vault kv put kv-v2/vault-demo/mysecret username=${ROTATED_USERNAME}"
 
 p "VSO reconciles within refreshAfter (30s). Poll the Secret until it flips..."
-pe "for i in \$(seq 1 20); do v=\$(kubectl get secret ${SECRET_NAME} -n ${VSO_NAMESPACE} -o jsonpath='{.data.username}' | base64 -d); echo \"  attempt \$i: \$v\"; if [ \"\$v\" = \"larry-rotated\" ]; then echo '  -> Secret updated automatically by VSO'; break; fi; sleep 3; done"
+pe "for i in \$(seq 1 ${SYNC_ATTEMPTS}); do v=\$(kubectl get secret ${SECRET_NAME} -n ${VSO_NAMESPACE} -o jsonpath='{.data.username}' | base64 -d); echo \"  attempt \$i: \$v\"; if [ \"\$v\" = \"${ROTATED_USERNAME}\" ]; then echo '  -> Secret updated automatically by VSO'; exit 0; fi; sleep 3; done; echo 'ERROR: Secret did not sync to ${ROTATED_USERNAME}' >&2; exit 1"
 
 p "Reset the secret back to its original value so the demo is repeatable"
-pe "kubectl exec vault-0 -n ${NAMESPACE} -- vault kv put kv-v2/vault-demo/mysecret username=larry"
+pe "kubectl exec vault-0 -n ${NAMESPACE} -- vault kv put kv-v2/vault-demo/mysecret username=${BASELINE_USERNAME}"
+
+p "Wait for the reset to sync so the next demo starts clean"
+pe "for i in \$(seq 1 ${SYNC_ATTEMPTS}); do v=\$(kubectl get secret ${SECRET_NAME} -n ${VSO_NAMESPACE} -o jsonpath='{.data.username}' | base64 -d); echo \"  attempt \$i: \$v\"; if [ \"\$v\" = \"${BASELINE_USERNAME}\" ]; then echo '  -> Secret reset synced by VSO'; exit 0; fi; sleep 3; done; echo 'ERROR: Secret did not reset to ${BASELINE_USERNAME}' >&2; exit 1"
 
 cat <<'POINTS'
 Key points:
