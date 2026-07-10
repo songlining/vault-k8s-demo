@@ -1,0 +1,20 @@
+{
+  "taskId": "09",
+  "title": "update-make-targets",
+  "summary": "Rewrote the top-level `Makefile` to add explicit two-cluster (Podman-backed kind) targets — `clusters`, `setup-vault`, `setup-vso`, `configure-vso-auth`, `vso-apply`, `check-vault-connectivity` — and an orchestrating `setup` target, while cleanly splitting old single-cluster targets (`verify`, `status`, `logs-otel`, `logs-agent`) from new two-cluster ones (`vso-verify`, `vso-status`, `logs-vso`) that use explicit `--context` flags.",
+  "keyLearnings": [
+    "- `VAULT_CONTEXT`/`VSO_CONTEXT`/`VAULT_ADDR`/`VSO_API_ADDR` are declared with `?=` (matching `scripts/lib/two-cluster-env.sh` defaults: `kind-vault-lab`, `kind-vso-lab`, `http://host.containers.internal:8200`, `https://host.containers.internal:6444`) and `export`ed, so they flow through naturally to every script invoked via `bash scripts/*.sh` without needing to be passed as explicit args — overriding via `make setup VAULT_CONTEXT=...` or an exported shell var both work.",
+    "- Important Make gotcha discovered: `## comment` help text is extracted via `grep`/`awk` over the raw `$(MAKEFILE_LIST)` file text, which is NOT subject to make's `$(VAR)` expansion (that only happens in recipe lines evaluated by make itself, not in comments read by a grep subprocess). Any `$(VAULT_CONTEXT)`-style references in help comments render as literal `$(VAULT_CONTEXT)` — so help text must reference variable names as plain text (e.g. \"(VAULT_CONTEXT)\") rather than expecting substitution.",
+    "- `make setup` runs `create-clusters.sh` → `setup-vault-cluster.sh` → `setup-vso-cluster.sh` → `configure-vso-kubernetes-auth.sh` → `apply-vso-demo.sh` in strict order (each depends on the previous per the task dependency chain 02→...→08); this ordering is required and was live-verified end-to-end on real Podman-backed clusters, including a full idempotent re-run.",
+    "- `demo`/`verify`/`status`/`logs-otel`/`logs-agent` are explicitly preserved as the old single-cluster (current kubectl context) Agent Injector/OTel flow and documented as such; `vso-demo`/`vso-verify`/`vso-status`/`logs-vso` are the two-cluster flow. `vso-demo.sh` itself (task 10) still needs its internal `kubectl` calls updated to use explicit contexts — that's out of scope for this Makefile-only task.",
+    "- `make verify-two-cluster` (mentioned in the feature exit criteria) is task 11's deliverable, not task 09's — task 09 only needed `clusters`/`setup-vault`/`setup-vso`/`configure-vso-auth`/an apply target/`setup`, all of which are done and live-tested."
+  ],
+  "filesChanged": [
+    "Makefile (rewritten)",
+    "tasks/vso-two-cluster-podman/README.md (marked task 09 done)"
+  ],
+  "blockers": [
+    "none — Makefile targets complete and live-validated against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters (fresh cluster creation path also exercised via reuse-detection since clusters pre-existed from prior task validation)."
+  ],
+  "timestamp": "2026-07-10T04:40:01.904Z"
+}
