@@ -234,6 +234,19 @@ Acceptance criteria:
 
 ### Phase 3 — Add shared JWT/OIDC environment variables
 
+> **Status: complete.** See `scripts/lib/two-cluster-env.sh`
+> (task `vso-jwt-oidc-auth-03`).
+>
+> **Correction from the original draft below, per the Phase 1 spike
+> decision:** `VSO_OIDC_ISSUER` must default to the JWT's actual `iss`
+> claim string (`https://kubernetes.default.svc.cluster.local` for default
+> kind clusters) — it is a plain string compare (`bound_issuer`), not a
+> fetch target, and setting it to the reachable host+port would make every
+> real login fail claim validation. `VSO_OIDC_JWKS_URL` is instead derived
+> from `${VSO_API_ADDR}` (the already-reachable cross-cluster API address,
+> not from `VSO_OIDC_ISSUER`), since spike 01 found the VSO cluster's
+> self-reported `jwks_uri` (a Podman-bridge IP) is not reliably reachable.
+
 Update:
 
 ```text
@@ -246,8 +259,8 @@ Add defaults:
 VSO_JWT_AUTH_MOUNT="${VSO_JWT_AUTH_MOUNT:-jwt-vso}"
 VSO_JWT_AUTH_ROLE="${VSO_JWT_AUTH_ROLE:-vso-demo}"
 VSO_JWT_AUDIENCE="${VSO_JWT_AUDIENCE:-vault}"
-VSO_OIDC_ISSUER="${VSO_OIDC_ISSUER:-https://host.containers.internal:6444}"
-VSO_OIDC_JWKS_URL="${VSO_OIDC_JWKS_URL:-${VSO_OIDC_ISSUER}/openid/v1/jwks}"
+VSO_OIDC_ISSUER="${VSO_OIDC_ISSUER:-https://kubernetes.default.svc.cluster.local}"
+VSO_OIDC_JWKS_URL="${VSO_OIDC_JWKS_URL:-${VSO_API_ADDR}/openid/v1/jwks}"
 ```
 
 Keep the existing Kubernetes auth variables temporarily during migration:

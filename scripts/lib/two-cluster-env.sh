@@ -89,8 +89,45 @@ VAULT_POD_LABEL_SELECTOR="${VAULT_POD_LABEL_SELECTOR:-app.kubernetes.io/name=vau
 # Kubernetes auth mount used by VSO (cross-cluster), distinct from the
 # pre-existing same-cluster `auth/kubernetes` mount used by the Agent
 # Injector / OTel demo paths, which must not be touched.
+#
+# DEPRECATION NOTE: these Kubernetes-auth variables are kept temporarily
+# for migration compatibility while the demo moves to JWT/OIDC auth (see
+# VSO_JWT_* / VSO_OIDC_* below, docs/vso-jwt-oidc-auth-plan.md, and
+# tasks/vso-jwt-oidc-auth/*.md). Do not remove until every script/task in
+# that plan has migrated off `auth/${VSO_AUTH_MOUNT}`.
 VSO_AUTH_MOUNT="${VSO_AUTH_MOUNT:-kubernetes-vso}"
 VSO_AUTH_ROLE="${VSO_AUTH_ROLE:-vso-demo}"
+
+# --------------------------------------------------------------------------
+# JWT/OIDC auth (VSO -> Vault), replacing the Kubernetes auth mount above
+# --------------------------------------------------------------------------
+# Vault JWT auth mount dedicated to the VSO cluster's service account JWTs,
+# validated via the VSO cluster's OIDC issuer/JWKS rather than a
+# TokenReview call back to the VSO cluster's API server. Named distinctly
+# from `${VSO_AUTH_MOUNT}` (`kubernetes-vso`) so both can exist side by
+# side during migration; see docs/vso-jwt-oidc-auth-spike-01.md for the
+# jwks_url vs oidc_discovery_url decision this mount's config relies on.
+VSO_JWT_AUTH_MOUNT="${VSO_JWT_AUTH_MOUNT:-jwt-vso}"
+VSO_JWT_AUTH_ROLE="${VSO_JWT_AUTH_ROLE:-vso-demo}"
+
+# Audience Vault expects (`bound_audiences`) and VSO's ServiceAccount
+# projected token requests (`aud`) must both use `vault` by default so a
+# JWT minted for another audience is rejected outright.
+VSO_JWT_AUDIENCE="${VSO_JWT_AUDIENCE:-vault}"
+
+# `bound_issuer` string Vault compares against the JWT's `iss` claim. This
+# is a plain string compare -- it does not need to be reachable from the
+# Vault cluster. Default kind clusters self-report the Kubernetes-internal
+# issuer below (see spike 01); override if the VSO cluster's kind config
+# sets `service-account-issuer` to something else.
+VSO_OIDC_ISSUER="${VSO_OIDC_ISSUER:-https://kubernetes.default.svc.cluster.local}"
+
+# JWKS endpoint Vault fetches signing keys from to validate VSO cluster
+# service account JWTs, reached over the same cross-cluster host+port as
+# ${VSO_API_ADDR} (see spike 01: the VSO cluster's self-reported
+# `jwks_uri` is a Podman-bridge IP that is not reliably reachable, so this
+# uses the same externally-reachable address as VSO_API_ADDR instead).
+VSO_OIDC_JWKS_URL="${VSO_OIDC_JWKS_URL:-${VSO_API_ADDR}/openid/v1/jwks}"
 
 SECRET_NAME="${SECRET_NAME:-vso-demo-mysecret}"
 APP_POD="${APP_POD:-vso-demo-app}"
@@ -287,6 +324,11 @@ VSO_OPERATOR_NAMESPACE=$VSO_OPERATOR_NAMESPACE
 VSO_CHART_VERSION=$VSO_CHART_VERSION
 VSO_AUTH_MOUNT=$VSO_AUTH_MOUNT
 VSO_AUTH_ROLE=$VSO_AUTH_ROLE
+VSO_JWT_AUTH_MOUNT=$VSO_JWT_AUTH_MOUNT
+VSO_JWT_AUTH_ROLE=$VSO_JWT_AUTH_ROLE
+VSO_JWT_AUDIENCE=$VSO_JWT_AUDIENCE
+VSO_OIDC_ISSUER=$VSO_OIDC_ISSUER
+VSO_OIDC_JWKS_URL=$VSO_OIDC_JWKS_URL
 SECRET_NAME=$SECRET_NAME
 APP_POD=$APP_POD
 EOF
