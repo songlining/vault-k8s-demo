@@ -1,7 +1,7 @@
 .PHONY: help setup clusters setup-vault setup-vso configure-vso-auth vso-apply \
         demo verify status logs-otel logs-agent \
         vso-demo vso-deck vso-verify vso-status logs-vso \
-        check-vault-connectivity
+        check-vault-connectivity verify-two-cluster
 .DEFAULT_GOAL := help
 
 # --------------------------------------------------------------------------
@@ -57,6 +57,9 @@ vso-apply: ## Apply VSO CRDs (VaultConnection/VaultAuth/VaultStaticSecret) and v
 
 check-vault-connectivity: ## Prove a pod in the VSO cluster can reach Vault at VAULT_ADDR
 	@bash scripts/check-vault-connectivity.sh
+
+verify-two-cluster: ## Full end-to-end two-cluster proof: placement, network, auth, VSO sync, and rotation
+	@bash scripts/verify-two-cluster.sh
 
 ## --- Guided demo flows -----------------------------------------------------
 

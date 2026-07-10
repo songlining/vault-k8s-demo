@@ -2,9 +2,64 @@
   "sourcePath": "/Users/larry.song/work/hashicorp/vault-k8s-demo/tasks/vso-two-cluster-podman/README.md",
   "tasks": {
     "10": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:34:26.890Z",
+      "completedAt": "2026-07-10T04:46:31.084Z",
+      "durationMs": 708989,
+      "reflection": {
+        "taskId": "10",
+        "title": "update-demo-scripts",
+        "summary": "Updated `vso-demo.sh` and `demo.sh` so every kubectl operation targets an explicit `--context` (Vault cluster vs VSO cluster) instead of the ambient current-context, refreshed the VSO demo's narrative/diagrams to describe the two-cluster architecture, and added two new unit test files validating context-explicitness and two-cluster content.",
+        "keyLearnings": [
+          "- Since `vso-demo.sh`/`demo.sh` build command *strings* for presentation (`pe \"kubectl ...\"` executed via `bash -o pipefail -c \"$cmd\"` in a fresh subshell), the `kubectl_vault`/`kubectl_vso` wrapper functions from `scripts/lib/two-cluster-env.sh` can't be called inline inside those strings without `export -f` gymnastics — simplest and most presentation-friendly is embedding `kubectl --context ${VAULT_CONTEXT}` / `--context ${VSO_CONTEXT}` directly in each command string; this also makes the two-cluster targeting visible to the audience watching the demo.",
+          "- `vso-demo.sh` still uses the wrapper functions (`kubectl_vault`/`kubectl_vso`, non-string calls) for its own internal preflight/pod-name-resolution logic before the presentation loop starts.",
+          "- `demo.sh` is the single-cluster Agent Injector/OTel demo and intentionally never touches VSO or the VSO cluster; it now targets `${VAULT_CONTEXT}` everywhere but otherwise keeps its existing behavior/content unchanged.",
+          "- Least-privilege section of `vso-demo.sh` now reads `auth/${VSO_AUTH_MOUNT}/role/${VSO_AUTH_ROLE}` (the dedicated cross-cluster mount from task 07), not the old same-cluster `auth/kubernetes/role/vso-demo`.",
+          "- The Makefile (task 09, already in-progress/committed as `3fbbd0d`) exports `VAULT_CONTEXT`/`VSO_CONTEXT`/`VAULT_ADDR`/`VSO_API_ADDR` before invoking `bash vso-demo.sh`/`bash demo.sh`, so `make vso-demo`/`make demo` and direct script invocation behave identically.",
+          "- Live-verified: both scripts run to completion (exit 0) with `NO_WAIT=true` while the ambient `kubectl config current-context` was set to an unrelated cluster (`kind-tfe`), including full rotate/verify/reset of `kv-v2/vault-demo/mysecret` → `vso-demo/vso-demo-mysecret` across the two real clusters, and the ambient context was left untouched afterward."
+        ],
+        "filesChanged": [
+          "vso-demo.sh (modified)",
+          "demo.sh (modified)",
+          "scripts/tests/test-vso-demo-validation.sh (created)",
+          "scripts/tests/test-demo-validation.sh (created)",
+          "tasks/vso-two-cluster-podman/README.md (modified: marked task 10 done)"
+        ],
+        "blockers": [
+          "none — both scripts are complete",
+          "tested (8/8 test files",
+          "73 assertions passing)",
+          "and live-verified end-to-end."
+        ],
+        "timestamp": "2026-07-10T04:46:15.963Z"
+      },
+      "toolUsage": {
+        "read": 7,
+        "write": 3,
+        "edit": 10,
+        "bash": 45,
+        "other": 1
+      },
+      "outputPreview": "Task 10 is complete. Final summary of work:\n\n- **`vso-demo.sh`**: Rewrote to source `scripts/lib/two-cluster-env.sh`, added preflight (`require_commands`, `require_contexts`), resolved the Vault pod name once via `kubectl_vault`, split `verify_ready` into Vault-cluster readiness + VSO-cluster readiness, and rebuilt every `pe \"kubectl ...\"` command to use explicit `--context ${VAULT_CONTEXT}` / `--context ${VSO_CONTEXT}`. Updated narrative, architecture diagram, and step-by-step flow to describe \n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "chore:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:"
+      ],
+      "commitSummary": "feat:; feat:; feat: (+2 more); chore:; feat:; feat: (+2 more)"
+    },
+    "11": {
       "status": "in_progress",
       "retries": 0,
-      "startedAt": "2026-07-10T04:34:26.890Z"
+      "startedAt": "2026-07-10T04:46:31.087Z"
     },
     "01": {
       "status": "completed",
@@ -453,16 +508,71 @@
     }
   },
   "startedAt": "2026-07-10T04:06:04.856Z",
-  "lastUpdatedAt": "2026-07-10T04:40:26.364Z",
+  "lastUpdatedAt": "2026-07-10T04:46:31.087Z",
   "paused": false,
   "prds": {
     "tasks-vso-two-cluster-podman-README-md": {
       "sourcePath": "/Users/larry.song/work/hashicorp/vault-k8s-demo/tasks/vso-two-cluster-podman/README.md",
       "tasks": {
         "10": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:34:26.890Z",
+          "completedAt": "2026-07-10T04:46:31.084Z",
+          "durationMs": 708989,
+          "reflection": {
+            "taskId": "10",
+            "title": "update-demo-scripts",
+            "summary": "Updated `vso-demo.sh` and `demo.sh` so every kubectl operation targets an explicit `--context` (Vault cluster vs VSO cluster) instead of the ambient current-context, refreshed the VSO demo's narrative/diagrams to describe the two-cluster architecture, and added two new unit test files validating context-explicitness and two-cluster content.",
+            "keyLearnings": [
+              "- Since `vso-demo.sh`/`demo.sh` build command *strings* for presentation (`pe \"kubectl ...\"` executed via `bash -o pipefail -c \"$cmd\"` in a fresh subshell), the `kubectl_vault`/`kubectl_vso` wrapper functions from `scripts/lib/two-cluster-env.sh` can't be called inline inside those strings without `export -f` gymnastics — simplest and most presentation-friendly is embedding `kubectl --context ${VAULT_CONTEXT}` / `--context ${VSO_CONTEXT}` directly in each command string; this also makes the two-cluster targeting visible to the audience watching the demo.",
+              "- `vso-demo.sh` still uses the wrapper functions (`kubectl_vault`/`kubectl_vso`, non-string calls) for its own internal preflight/pod-name-resolution logic before the presentation loop starts.",
+              "- `demo.sh` is the single-cluster Agent Injector/OTel demo and intentionally never touches VSO or the VSO cluster; it now targets `${VAULT_CONTEXT}` everywhere but otherwise keeps its existing behavior/content unchanged.",
+              "- Least-privilege section of `vso-demo.sh` now reads `auth/${VSO_AUTH_MOUNT}/role/${VSO_AUTH_ROLE}` (the dedicated cross-cluster mount from task 07), not the old same-cluster `auth/kubernetes/role/vso-demo`.",
+              "- The Makefile (task 09, already in-progress/committed as `3fbbd0d`) exports `VAULT_CONTEXT`/`VSO_CONTEXT`/`VAULT_ADDR`/`VSO_API_ADDR` before invoking `bash vso-demo.sh`/`bash demo.sh`, so `make vso-demo`/`make demo` and direct script invocation behave identically.",
+              "- Live-verified: both scripts run to completion (exit 0) with `NO_WAIT=true` while the ambient `kubectl config current-context` was set to an unrelated cluster (`kind-tfe`), including full rotate/verify/reset of `kv-v2/vault-demo/mysecret` → `vso-demo/vso-demo-mysecret` across the two real clusters, and the ambient context was left untouched afterward."
+            ],
+            "filesChanged": [
+              "vso-demo.sh (modified)",
+              "demo.sh (modified)",
+              "scripts/tests/test-vso-demo-validation.sh (created)",
+              "scripts/tests/test-demo-validation.sh (created)",
+              "tasks/vso-two-cluster-podman/README.md (modified: marked task 10 done)"
+            ],
+            "blockers": [
+              "none — both scripts are complete",
+              "tested (8/8 test files",
+              "73 assertions passing)",
+              "and live-verified end-to-end."
+            ],
+            "timestamp": "2026-07-10T04:46:15.963Z"
+          },
+          "toolUsage": {
+            "read": 7,
+            "write": 3,
+            "edit": 10,
+            "bash": 45,
+            "other": 1
+          },
+          "outputPreview": "Task 10 is complete. Final summary of work:\n\n- **`vso-demo.sh`**: Rewrote to source `scripts/lib/two-cluster-env.sh`, added preflight (`require_commands`, `require_contexts`), resolved the Vault pod name once via `kubectl_vault`, split `verify_ready` into Vault-cluster readiness + VSO-cluster readiness, and rebuilt every `pe \"kubectl ...\"` command to use explicit `--context ${VAULT_CONTEXT}` / `--context ${VSO_CONTEXT}`. Updated narrative, architecture diagram, and step-by-step flow to describe \n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "chore:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:"
+          ],
+          "commitSummary": "feat:; feat:; feat: (+2 more); chore:; feat:; feat: (+2 more)"
+        },
+        "11": {
           "status": "in_progress",
           "retries": 0,
-          "startedAt": "2026-07-10T04:34:26.890Z"
+          "startedAt": "2026-07-10T04:46:31.087Z"
         },
         "01": {
           "status": "completed",
@@ -911,7 +1021,7 @@
         }
       },
       "startedAt": "2026-07-10T04:06:04.856Z",
-      "lastUpdatedAt": "2026-07-10T04:40:26.364Z",
+      "lastUpdatedAt": "2026-07-10T04:46:31.087Z",
       "paused": false
     }
   }

@@ -1,0 +1,27 @@
+{
+  "taskId": "10",
+  "title": "update-demo-scripts",
+  "summary": "Updated `vso-demo.sh` and `demo.sh` so every kubectl operation targets an explicit `--context` (Vault cluster vs VSO cluster) instead of the ambient current-context, refreshed the VSO demo's narrative/diagrams to describe the two-cluster architecture, and added two new unit test files validating context-explicitness and two-cluster content.",
+  "keyLearnings": [
+    "- Since `vso-demo.sh`/`demo.sh` build command *strings* for presentation (`pe \"kubectl ...\"` executed via `bash -o pipefail -c \"$cmd\"` in a fresh subshell), the `kubectl_vault`/`kubectl_vso` wrapper functions from `scripts/lib/two-cluster-env.sh` can't be called inline inside those strings without `export -f` gymnastics — simplest and most presentation-friendly is embedding `kubectl --context ${VAULT_CONTEXT}` / `--context ${VSO_CONTEXT}` directly in each command string; this also makes the two-cluster targeting visible to the audience watching the demo.",
+    "- `vso-demo.sh` still uses the wrapper functions (`kubectl_vault`/`kubectl_vso`, non-string calls) for its own internal preflight/pod-name-resolution logic before the presentation loop starts.",
+    "- `demo.sh` is the single-cluster Agent Injector/OTel demo and intentionally never touches VSO or the VSO cluster; it now targets `${VAULT_CONTEXT}` everywhere but otherwise keeps its existing behavior/content unchanged.",
+    "- Least-privilege section of `vso-demo.sh` now reads `auth/${VSO_AUTH_MOUNT}/role/${VSO_AUTH_ROLE}` (the dedicated cross-cluster mount from task 07), not the old same-cluster `auth/kubernetes/role/vso-demo`.",
+    "- The Makefile (task 09, already in-progress/committed as `3fbbd0d`) exports `VAULT_CONTEXT`/`VSO_CONTEXT`/`VAULT_ADDR`/`VSO_API_ADDR` before invoking `bash vso-demo.sh`/`bash demo.sh`, so `make vso-demo`/`make demo` and direct script invocation behave identically.",
+    "- Live-verified: both scripts run to completion (exit 0) with `NO_WAIT=true` while the ambient `kubectl config current-context` was set to an unrelated cluster (`kind-tfe`), including full rotate/verify/reset of `kv-v2/vault-demo/mysecret` → `vso-demo/vso-demo-mysecret` across the two real clusters, and the ambient context was left untouched afterward."
+  ],
+  "filesChanged": [
+    "vso-demo.sh (modified)",
+    "demo.sh (modified)",
+    "scripts/tests/test-vso-demo-validation.sh (created)",
+    "scripts/tests/test-demo-validation.sh (created)",
+    "tasks/vso-two-cluster-podman/README.md (modified: marked task 10 done)"
+  ],
+  "blockers": [
+    "none — both scripts are complete",
+    "tested (8/8 test files",
+    "73 assertions passing)",
+    "and live-verified end-to-end."
+  ],
+  "timestamp": "2026-07-10T04:46:15.963Z"
+}
