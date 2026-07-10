@@ -14,8 +14,12 @@
 #      the VSO cluster ONLY (not in the Vault cluster).
 #   4. A pod in the VSO cluster can reach Vault at the documented external
 #      address (VAULT_ADDR).
-#   5. Vault can authenticate a real VSO cluster service account JWT through
-#      the dedicated auth/kubernetes-vso mount.
+#   5. Vault authenticates a real VSO cluster service account JWT directly
+#      against the VSO cluster's JWKS (no TokenReview) through the
+#      dedicated auth/${VSO_JWT_AUTH_MOUNT} (jwt-vso) mount -- and proves
+#      that mount's strict claim binding by also confirming a
+#      wrong-audience JWT and a wrong-service-account JWT are BOTH
+#      rejected.
 #   6. The VaultStaticSecret is Ready/Synced and its native Secret value
 #      matches what's actually in Vault.
 #   7. A rotation performed in the Vault cluster is observed in the VSO
@@ -29,10 +33,15 @@
 #
 # Env overrides live in scripts/lib/two-cluster-env.sh (VAULT_CONTEXT,
 # VSO_CONTEXT, VAULT_ADDR, NAMESPACE, VSO_NAMESPACE, VSO_OPERATOR_NAMESPACE,
-# VSO_AUTH_MOUNT, VSO_AUTH_ROLE, SECRET_NAME, APP_POD), plus
-# BASELINE_USERNAME (default: larry), ROTATED_USERNAME (default:
-# larry-rotated), ROTATION_ATTEMPTS (default: 20), and ROTATION_SLEEP
-# (default: 3, seconds between polls).
+# VSO_JWT_AUTH_MOUNT, VSO_JWT_AUTH_ROLE, VSO_JWT_AUDIENCE, SECRET_NAME,
+# APP_POD), plus BASELINE_USERNAME (default: larry), ROTATED_USERNAME
+# (default: larry-rotated), ROTATION_ATTEMPTS (default: 20),
+# ROTATION_SLEEP (default: 3, seconds between polls), and
+# VSO_JWT_WRONG_AUDIENCE (default: not-${VSO_JWT_AUDIENCE}, used only for
+# the negative wrong-audience test in section 5).
+#
+# NOTE: no full JWT value is ever printed to stdout/stderr by this script --
+# only pass/fail outcomes and Vault's own (JWT-free) login/error responses.
 
 set -euo pipefail
 
@@ -217,39 +226,111 @@ fi
 echo "OK: a pod in the VSO cluster reached Vault at '${VAULT_ADDR}'."
 
 # ---------------------------------------------------------------------------
-# 5. Kubernetes auth: Vault authenticates a real VSO cluster service account
-#    JWT through auth/kubernetes-vso.
+# 5. JWT/OIDC auth: Vault authenticates a real VSO cluster service account
+#    JWT, validated directly against the VSO cluster's JWKS (no
+#    TokenReview, no reviewer JWT), through auth/${VSO_JWT_AUTH_MOUNT}. This
+#    also proves the mount's strict claim binding by confirming a
+#    wrong-audience JWT and a wrong-service-account JWT are BOTH rejected
+#    -- JWT/OIDC security depends on this, so these negative checks are
+#    mandatory, not optional.
 # ---------------------------------------------------------------------------
 
-section "5/7 kubernetes auth (auth/${VSO_AUTH_MOUNT})"
+section "5/7 jwt/oidc auth (auth/${VSO_JWT_AUTH_MOUNT})"
 
-if ! kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault auth list 2>/dev/null | grep -q "^${VSO_AUTH_MOUNT}/"; then
+if ! kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault auth list 2>/dev/null | grep -q "^${VSO_JWT_AUTH_MOUNT}/"; then
   fail_section \
-    "auth/${VSO_AUTH_MOUNT} is not enabled in context '${VAULT_CONTEXT}'." \
-    "Run 'make configure-vso-auth' (or scripts/configure-vso-kubernetes-auth.sh) first."
+    "auth/${VSO_JWT_AUTH_MOUNT} is not enabled in context '${VAULT_CONTEXT}'." \
+    "Run 'make configure-vso-auth' (or scripts/configure-vso-jwt-auth.sh) first."
 fi
 
-VSO_SA_JWT=$(kubectl_vso create token vso-demo -n "$VSO_NAMESPACE" --duration 10m 2>/dev/null || true)
+# 5.0 Role/config output includes strict claim binding (bound_audiences AND
+#     bound_subject, not just the issuer) -- the concrete mitigation this
+#     mount relies on so the wrong audience or wrong service account can't
+#     accidentally authenticate.
+ROLE_OUTPUT=$(kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault read -format=json \
+  "auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}" 2>&1) || {
+  fail_section \
+    "Could not read auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE} in context '${VAULT_CONTEXT}'." \
+    "Run 'make configure-vso-auth' (or scripts/configure-vso-jwt-auth.sh) first."
+}
+
+ROLE_BOUND_AUDIENCES=$(printf '%s' "$ROLE_OUTPUT" | jq -r '(.data.bound_audiences // []) | join(",")' 2>/dev/null || true)
+ROLE_BOUND_SUBJECT=$(printf '%s' "$ROLE_OUTPUT" | jq -r '.data.bound_subject // empty' 2>/dev/null || true)
+EXPECTED_BOUND_SUBJECT="system:serviceaccount:${VSO_NAMESPACE}:vso-demo"
+
+if [ "$ROLE_BOUND_AUDIENCES" != "$VSO_JWT_AUDIENCE" ] || [ "$ROLE_BOUND_SUBJECT" != "$EXPECTED_BOUND_SUBJECT" ]; then
+  fail_section \
+    "auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE} is not strictly bound (bound_audiences='${ROLE_BOUND_AUDIENCES:-<none>}', bound_subject='${ROLE_BOUND_SUBJECT:-<none>}'; expected audience '${VSO_JWT_AUDIENCE}' and subject '${EXPECTED_BOUND_SUBJECT}')." \
+    "Run 'make configure-vso-auth' (or scripts/configure-vso-jwt-auth.sh) first."
+fi
+echo "OK: auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE} strictly binds bound_audiences='${VSO_JWT_AUDIENCE}' and bound_subject='${EXPECTED_BOUND_SUBJECT}'."
+
+# 5.1 Positive: the real 'vso-demo' service account, with the intended
+#     audience, must authenticate successfully.
+VSO_SA_JWT=$(kubectl_vso create token vso-demo -n "$VSO_NAMESPACE" --duration 10m --audience "${VSO_JWT_AUDIENCE}" 2>/dev/null || true)
 if [ -z "$VSO_SA_JWT" ]; then
   fail_section \
-    "Failed to mint a token for service account 'vso-demo' in namespace '${VSO_NAMESPACE}' of context '${VSO_CONTEXT}'." \
+    "Failed to mint a token for service account 'vso-demo' in namespace '${VSO_NAMESPACE}' of context '${VSO_CONTEXT}' (audience: ${VSO_JWT_AUDIENCE})." \
     "Run 'make setup-vso' (or scripts/setup-vso-cluster.sh) first."
 fi
 
 LOGIN_OUTPUT=$(kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- vault write -format=json \
-  "auth/${VSO_AUTH_MOUNT}/login" role="${VSO_AUTH_ROLE}" jwt="${VSO_SA_JWT}" 2>&1) || {
+  "auth/${VSO_JWT_AUTH_MOUNT}/login" role="${VSO_JWT_AUTH_ROLE}" jwt="${VSO_SA_JWT}" 2>&1) || {
+  unset VSO_SA_JWT
   fail_section \
-    "Vault rejected the 'vso-demo' service account JWT against auth/${VSO_AUTH_MOUNT}/login (role: ${VSO_AUTH_ROLE})." \
+    "Vault rejected the correct 'vso-demo' service account JWT (audience: ${VSO_JWT_AUDIENCE}) against auth/${VSO_JWT_AUTH_MOUNT}/login (role: ${VSO_JWT_AUTH_ROLE})." \
     "$LOGIN_OUTPUT"
 }
+unset VSO_SA_JWT
 
 LOGIN_TOKEN=$(printf '%s' "$LOGIN_OUTPUT" | jq -r '.auth.client_token // empty' 2>/dev/null || true)
 if [ -z "$LOGIN_TOKEN" ]; then
   fail_section \
-    "Vault login through auth/${VSO_AUTH_MOUNT} did not return a client_token." \
+    "Vault login through auth/${VSO_JWT_AUTH_MOUNT} did not return a client_token for the correct 'vso-demo' JWT." \
     "$LOGIN_OUTPUT"
 fi
-echo "OK: Vault authenticated a real VSO cluster 'vso-demo' service account JWT through auth/${VSO_AUTH_MOUNT} (role: ${VSO_AUTH_ROLE})."
+unset LOGIN_TOKEN LOGIN_OUTPUT
+echo "OK: correct 'vso-demo' service account JWT (audience: ${VSO_JWT_AUDIENCE}) authenticates through auth/${VSO_JWT_AUTH_MOUNT} (role: ${VSO_JWT_AUTH_ROLE})."
+
+# 5.2 Negative: the real 'vso-demo' service account but the WRONG
+#     audience must be rejected (proves bound_audiences is enforced).
+VSO_JWT_WRONG_AUDIENCE="${VSO_JWT_WRONG_AUDIENCE:-not-${VSO_JWT_AUDIENCE}}"
+WRONG_AUD_JWT=$(kubectl_vso create token vso-demo -n "$VSO_NAMESPACE" --duration 10m --audience "${VSO_JWT_WRONG_AUDIENCE}" 2>/dev/null || true)
+if [ -z "$WRONG_AUD_JWT" ]; then
+  fail_section \
+    "Failed to mint a wrong-audience token for service account 'vso-demo' in namespace '${VSO_NAMESPACE}' of context '${VSO_CONTEXT}' (audience: ${VSO_JWT_WRONG_AUDIENCE})." \
+    "Run 'make setup-vso' (or scripts/setup-vso-cluster.sh) first."
+fi
+
+if kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- vault write -format=json \
+    "auth/${VSO_JWT_AUTH_MOUNT}/login" role="${VSO_JWT_AUTH_ROLE}" jwt="${WRONG_AUD_JWT}" >/dev/null 2>&1; then
+  unset WRONG_AUD_JWT
+  fail_section \
+    "Vault incorrectly ACCEPTED a 'vso-demo' service account JWT with the wrong audience ('${VSO_JWT_WRONG_AUDIENCE}') against auth/${VSO_JWT_AUTH_MOUNT}/login." \
+    "Strict bound_audiences claim binding is not being enforced; check auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}."
+fi
+unset WRONG_AUD_JWT
+echo "OK: Vault rejected a 'vso-demo' service account JWT with the wrong audience ('${VSO_JWT_WRONG_AUDIENCE}')."
+
+# 5.3 Negative: the correct audience but the WRONG service account (the
+#     namespace's 'default' SA, not 'vso-demo') must be rejected (proves
+#     bound_subject is enforced).
+WRONG_SA_JWT=$(kubectl_vso create token default -n "$VSO_NAMESPACE" --duration 10m --audience "${VSO_JWT_AUDIENCE}" 2>/dev/null || true)
+if [ -z "$WRONG_SA_JWT" ]; then
+  fail_section \
+    "Failed to mint a wrong-service-account token for the 'default' service account in namespace '${VSO_NAMESPACE}' of context '${VSO_CONTEXT}'." \
+    "Run 'make setup-vso' (or scripts/setup-vso-cluster.sh) first."
+fi
+
+if kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- vault write -format=json \
+    "auth/${VSO_JWT_AUTH_MOUNT}/login" role="${VSO_JWT_AUTH_ROLE}" jwt="${WRONG_SA_JWT}" >/dev/null 2>&1; then
+  unset WRONG_SA_JWT
+  fail_section \
+    "Vault incorrectly ACCEPTED a JWT from the wrong service account ('default' in namespace '${VSO_NAMESPACE}') against auth/${VSO_JWT_AUTH_MOUNT}/login." \
+    "Strict bound_subject claim binding is not being enforced; check auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}."
+fi
+unset WRONG_SA_JWT
+echo "OK: Vault rejected a JWT from the wrong service account ('default' in namespace '${VSO_NAMESPACE}')."
 
 # ---------------------------------------------------------------------------
 # 6. VaultStaticSecret reconciliation + native Secret value
@@ -353,7 +434,8 @@ echo "VERIFIED: two-cluster VSO demo is healthy end-to-end."
 echo "  Vault cluster (context '${VAULT_CONTEXT}'):  Vault Running/unsealed"
 echo "  VSO cluster   (context '${VSO_CONTEXT}'):    VSO Available, CRDs installed, app Running"
 echo "  Network:      VSO cluster -> Vault @ ${VAULT_ADDR} reachable"
-echo "  Auth:         auth/${VSO_AUTH_MOUNT} authenticates vso-demo service account (role: ${VSO_AUTH_ROLE})"
+echo "  Auth:         auth/${VSO_JWT_AUTH_MOUNT} (JWT/OIDC) authenticates vso-demo service account (role: ${VSO_JWT_AUTH_ROLE});"
+echo "                wrong-audience and wrong-service-account JWTs correctly rejected"
 echo "  Sync:         VaultStaticSecret '${SECRET_NAME}' Ready, native Secret matches Vault"
 if [ "$SKIP_ROTATION" -eq 1 ]; then
   echo "  Rotation:     skipped (--skip-rotation)"

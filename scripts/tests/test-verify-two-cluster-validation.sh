@@ -11,8 +11,21 @@
 #   - happy path (--check-only, no cluster mutation)
 #   - section review: all 7 sections are present, in order, and each has a
 #     matching fail_section actionable-message call
+#   - section 5 (auth) uses auth/${VSO_JWT_AUTH_MOUNT}/login (jwt-vso), not
+#     the old auth/kubernetes-vso mount, and includes:
+#       * a positive login with the vso-demo service account + intended
+#         audience
+#       * a mandatory negative login with a wrong audience, asserted to
+#         fail
+#       * a mandatory negative login with the wrong service account
+#         (default, not vso-demo), asserted to fail
+#       * a review of the role's bound_audiences/bound_subject (strict
+#         claim binding)
+#   - final summary references auth/jwt-vso (JWT/OIDC) and the
+#     negative-check outcomes
 #   - every kubectl invocation uses an explicit-context wrapper
 #   - rotation section resets the baseline value even on failure
+#   - no full JWT value is ever echoed/printed by the script
 #
 # These tests never mutate any real cluster beyond `--check-only` (which
 # only validates tools/contexts) -- the full end-to-end run (including the
@@ -134,7 +147,7 @@ EXPECTED_SECTIONS=(
   "2/7 vault placement + readiness"
   "3/7 vso placement + readiness"
   "4/7 network reachability"
-  "5/7 kubernetes auth"
+  "5/7 jwt/oidc auth"
   "6/7 vso reconciliation + secret sync"
   "7/7 rotation"
 )
@@ -151,7 +164,7 @@ LINE_1=$(grep -n '"1/7 contexts"' "$VERIFY_SCRIPT" | head -1 | cut -d: -f1)
 LINE_2=$(grep -n '"2/7 vault placement' "$VERIFY_SCRIPT" | head -1 | cut -d: -f1)
 LINE_3=$(grep -n '"3/7 vso placement' "$VERIFY_SCRIPT" | head -1 | cut -d: -f1)
 LINE_4=$(grep -n '4/7 network reachability' "$VERIFY_SCRIPT" | head -1 | cut -d: -f1)
-LINE_5=$(grep -n '"5/7 kubernetes auth' "$VERIFY_SCRIPT" | head -1 | cut -d: -f1)
+LINE_5=$(grep -n '"5/7 jwt/oidc auth' "$VERIFY_SCRIPT" | head -1 | cut -d: -f1)
 LINE_6=$(grep -n '"6/7 vso reconciliation' "$VERIFY_SCRIPT" | head -1 | cut -d: -f1)
 LINE_7=$(grep -n '7/7 rotation' "$VERIFY_SCRIPT" | head -1 | cut -d: -f1)
 
@@ -190,14 +203,86 @@ else
   fail=$((fail + 1))
 fi
 
-# 12. Auth section actually performs a real login (not just a status check).
+# 12. Auth section actually performs real vault write .../login attempts
+#     (not just a status check) using auth/${VSO_JWT_AUTH_MOUNT}, not the
+#     old auth/kubernetes-vso mount.
 assert_contains \
   "auth section performs a real vault write .../login with a minted JWT" \
   "$CONTENTS" 'vault write -format=json'
 
 assert_contains \
-  "auth section mints a token for the vso-demo service account" \
+  "auth section logs in against auth/\${VSO_JWT_AUTH_MOUNT}/login" \
+  "$CONTENTS" 'auth/${VSO_JWT_AUTH_MOUNT}/login'
+
+if echo "$CONTENTS" | grep -qE '"auth/\$\{VSO_AUTH_MOUNT\}/login"'; then
+  echo "FAIL: script still logs in against the old auth/\${VSO_AUTH_MOUNT}/login mount"
+  fail=$((fail + 1))
+else
+  echo "PASS: script no longer logs in against the old auth/\${VSO_AUTH_MOUNT}/login mount"
+  pass=$((pass + 1))
+fi
+
+assert_contains \
+  "auth section mints a correct-audience token for the vso-demo service account" \
   "$CONTENTS" 'kubectl_vso create token vso-demo'
+
+assert_contains \
+  "positive login mints with the intended VSO_JWT_AUDIENCE" \
+  "$CONTENTS" '--audience "${VSO_JWT_AUDIENCE}"'
+
+# 12a. Negative test: wrong audience is minted and its login is asserted to
+#      fail (mandatory per the task spec -- JWT/OIDC security depends on
+#      strict claim binding).
+assert_contains \
+  "wrong-audience negative test mints a vso-demo token with a wrong audience" \
+  "$CONTENTS" 'VSO_JWT_WRONG_AUDIENCE'
+
+assert_contains \
+  "wrong-audience negative test asserts Vault rejects it" \
+  "$CONTENTS" 'incorrectly ACCEPTED a '"'"'vso-demo'"'"' service account JWT with the wrong audience'
+
+# 12b. Negative test: wrong service account (default, not vso-demo) is
+#      minted and its login is asserted to fail.
+assert_contains \
+  "wrong-service-account negative test mints a token for the default service account" \
+  "$CONTENTS" 'kubectl_vso create token default'
+
+assert_contains \
+  "wrong-service-account negative test asserts Vault rejects it" \
+  "$CONTENTS" 'incorrectly ACCEPTED a JWT from the wrong service account'
+
+# 12c. Role/config output review asserts strict claim binding (both
+#      bound_audiences and bound_subject), not just one or the other.
+assert_contains \
+  "auth section reviews bound_audiences from the role output" \
+  "$CONTENTS" 'bound_audiences'
+
+assert_contains \
+  "auth section reviews bound_subject from the role output" \
+  "$CONTENTS" 'bound_subject'
+
+# 12d. Final summary references auth/jwt-vso and JWT/OIDC, not the old
+#      kubernetes-vso auth mount.
+assert_contains \
+  "final summary references auth/\${VSO_JWT_AUTH_MOUNT} (JWT/OIDC)" \
+  "$CONTENTS" 'auth/${VSO_JWT_AUTH_MOUNT} (JWT/OIDC)'
+
+assert_contains \
+  "final summary references wrong-audience and wrong-service-account rejection" \
+  "$CONTENTS" 'wrong-audience and wrong-service-account JWTs correctly rejected'
+
+# 12e. No full JWT value is ever printed: only names of variables holding
+#      minted tokens should appear in echo/fail_section messages, never
+#      $VSO_SA_JWT/$WRONG_AUD_JWT/$WRONG_SA_JWT interpolated directly into
+#      an echo or fail_section string (they are only ever passed as a
+#      `jwt="..."` argument to `vault write`, never echoed).
+if grep -nE 'echo.*\$(\{)?(VSO_SA_JWT|WRONG_AUD_JWT|WRONG_SA_JWT)(\})?' "$VERIFY_SCRIPT" >/dev/null; then
+  echo "FAIL: found an echo that appears to print a raw JWT variable"
+  fail=$((fail + 1))
+else
+  echo "PASS: no echo prints a raw JWT variable"
+  pass=$((pass + 1))
+fi
 
 # 13. Every kubectl invocation in the script uses an explicit context (via
 #     the kubectl_vso/kubectl_vault wrappers) -- guard against regressions
