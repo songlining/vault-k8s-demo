@@ -6,10 +6,10 @@ Status legend: [ ] todo, [~] in-progress, [x] done
 
 Tasks
 
-- [~] 01 — spike-oidc-discovery-and-jwks → `01-spike-oidc-discovery-and-jwks.md`
-- [ ] 02 — configure-kind-oidc-issuer → `02-configure-kind-oidc-issuer.md`
-- [ ] 03 — add-jwt-oidc-env-defaults → `03-add-jwt-oidc-env-defaults.md`
-- [ ] 04 — implement-vso-jwt-auth-setup → `04-implement-vso-jwt-auth-setup.md`
+- [x] 01 — spike-oidc-discovery-and-jwks → `01-spike-oidc-discovery-and-jwks.md`
+- [x] 02 — configure-kind-oidc-issuer → `02-configure-kind-oidc-issuer.md`
+- [x] 03 — add-jwt-oidc-env-defaults → `03-add-jwt-oidc-env-defaults.md`
+- [~] 04 — implement-vso-jwt-auth-setup → `04-implement-vso-jwt-auth-setup.md`
 - [ ] 05 — refactor-vso-cluster-setup → `05-refactor-vso-cluster-setup.md`
 - [ ] 06 — switch-vso-vaultauth-to-jwt → `06-switch-vso-vaultauth-to-jwt.md`
 - [ ] 07 — update-make-targets-and-setup-flow → `07-update-make-targets-and-setup-flow.md`
