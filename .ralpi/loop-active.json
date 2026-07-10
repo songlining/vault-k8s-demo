@@ -1,20 +1,19 @@
 {
-  "taskFile": "/Users/larry.song/work/hashicorp/vault-k8s-demo/tasks/vso-two-cluster-podman/README.md",
+  "taskFile": "/Users/larry.song/work/hashicorp/vault-k8s-demo/tasks/vso-jwt-oidc-auth/README.md",
   "mode": "parallel",
-  "startedAt": "2026-07-10T04:06:39.579Z",
+  "startedAt": "2026-07-10T09:00:10.602Z",
   "taskIds": [
     "01",
     "02",
     "03",
     "04",
-    "06",
     "05",
+    "06",
     "07",
     "08",
     "09",
     "10",
-    "11",
-    "12"
+    "11"
   ],
-  "prdKey": "tasks-vso-two-cluster-podman-README-md"
+  "prdKey": "tasks-vso-jwt-oidc-auth-README-md"
 }
