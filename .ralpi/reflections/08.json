@@ -1,0 +1,26 @@
+{
+  "taskId": "08",
+  "title": "apply-vso-crds-and-consuming-app",
+  "summary": "Created `scripts/apply-vso-demo.sh`, an idempotent, context-explicit script that seeds the Vault baseline secret, applies `VaultConnection`/`VaultAuth`/`VaultStaticSecret` and recreates the plain `vso-demo-app` pod entirely within the VSO cluster, then waits for the native Secret and pod to be ready; validated with a 19-case unit test suite and live end-to-end against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters, including secret rotation and idempotent re-run.",
+  "keyLearnings": [
+    "- `VaultConnection.spec.address` is set to `${VAULT_ADDR}` (`http://host.containers.internal:8200`) from `scripts/lib/two-cluster-env.sh`; `VaultAuth.spec.mount`/`role` use `${VSO_AUTH_MOUNT}`/`${VSO_AUTH_ROLE}` (`kubernetes-vso`/`vso-demo`) rather than hardcoding, so any future env override flows through automatically.",
+    "- The consuming app pod is fully recreated (delete --ignore-not-found --wait=true, then apply) each run rather than just re-applied, matching the pattern used for `vault-demo` in `scripts/setup-vault-cluster.sh` — this guarantees `envFrom` always captures a fresh Secret value at pod start and makes re-running the script safe/idempotent for demo purposes.",
+    "- The script preflights that the `vso-demo` service account already exists in `VSO_NAMESPACE` (created by `scripts/setup-vso-cluster.sh`) and that a Vault pod exists in `VAULT_CONTEXT`/`NAMESPACE` (created by `scripts/setup-vault-cluster.sh`) before doing any real work, with actionable error messages pointing at the prerequisite scripts.",
+    "- Live-verified against real clusters: CRDs (`vaultconnection`/`vaultauth`/`vaultstaticsecret`) show `HEALTHY=True`/`READY=True`/`SYNCED=True`; `vso-demo-mysecret` native Secret and `vso-demo-app` env both decode to `larry`; zero `vault.hashicorp.com` annotations on the app pod; rotating the value in the Vault cluster (`kv-v2/vault-demo/mysecret` → `larry-rotated-1`) synced into the VSO cluster's native Secret within ~9s (well under the 30s `refreshAfter`); no `vaultconnection` CRD/resource type exists in the Vault cluster (confirms VSO CRDs are VSO-cluster-only by construction, since VSO's CRDs aren't even installed there).",
+    "- Test suite mirrors the conventions from tasks 06/07 (`--check-only`, context/command preflight failures, bare-`kubectl`-wrapper regression guard) plus new manifest-content assertions (external address, dedicated mount, single-container/no-annotations app pod) — all 58 tests across the 6 script test files in `scripts/tests/` currently pass."
+  ],
+  "filesChanged": [
+    "scripts/apply-vso-demo.sh (created)",
+    "scripts/tests/test-apply-vso-demo-validation.sh (created)",
+    "tasks/vso-two-cluster-podman/README.md (modified: marked task 08 done)"
+  ],
+  "blockers": [
+    "none — script is complete",
+    "idempotent",
+    "and validated live end-to-end (apply",
+    "rotation",
+    "reset",
+    "re-run)."
+  ],
+  "timestamp": "2026-07-10T04:34:04.449Z"
+}
