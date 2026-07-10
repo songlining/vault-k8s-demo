@@ -57,9 +57,66 @@
       "commitSummary": "feat:; feat:; feat: (+2 more); chore:; feat:; feat: (+2 more)"
     },
     "11": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:46:31.087Z",
+      "completedAt": "2026-07-10T04:51:40.641Z",
+      "durationMs": 299763,
+      "reflection": {
+        "taskId": "11",
+        "title": "add-two-cluster-verification",
+        "summary": "Added `scripts/verify-two-cluster.sh`, a 7-section end-to-end verification script proving the two-cluster VSO demo works (contexts, Vault/VSO placement in each cluster, network reachability, real Kubernetes-auth login, VaultStaticSecret sync, and rotation), wired it up as `make verify-two-cluster`, and added a unit test suite; live-verified against the real `kind-vault-lab`/`kind-vso-lab` clusters including deliberate failure injection.",
+        "keyLearnings": [
+          "- `kubectl create token <sa> --duration Xm` requires a minimum of 10 minutes (`may not specify a duration less than 10 minutes`) — used `10m` for the vso-demo SA JWT minted for the live auth/kubernetes-vso login check.",
+          "- Section 5 (kubernetes auth) does a *real* `vault write auth/kubernetes-vso/login role=vso-demo jwt=<minted-jwt>` and checks for `.auth.client_token` via `jq` — this proves actual auth works, not just that the mount exists.",
+          "- Section 6 compares `vault kv get -field=username kv-v2/vault-demo/mysecret` (Vault cluster) directly against the native Secret's base64-decoded value (VSO cluster) rather than hardcoding an expected string, so it's robust to whatever the current baseline is.",
+          "- Section 7 (rotation) always attempts to reset `kv-v2/vault-demo/mysecret` back to `BASELINE_USERNAME` even on the failure path (before calling `fail_section`), so a failed run never leaves the demo secret rotated; live-verified full round trip took ~6 poll attempts (~18s) with default `ROTATION_SLEEP=3`.",
+          "- Negative-placement checks (Vault absent from VSO cluster; VSO operator/CRDs/`vso-demo` namespace absent from Vault cluster) are asserted directly, matching the exit-criteria's \"negative placement\" requirement.",
+          "- `--check-only` only validates required commands + `require_contexts`, never touches a live cluster beyond that — matches the pattern used by every other script in `scripts/`.",
+          "- `--skip-rotation` flag lets `make verify-two-cluster`-style pre-demo checks run faster when the rotation window doesn't need re-proving every time.",
+          "- Full live run against real Podman-backed clusters took ~48s (with rotation); `--check-only` is near-instant; failure-path tests (bad `VAULT_ADDR`, bad `VSO_AUTH_ROLE`) were verified to fail at the correct section (4 and 5 respectively) with actionable diagnostics, and the baseline secret value (`larry`) was confirmed unchanged in both clusters afterward.",
+          "- Reused `scripts/check-vault-connectivity.sh` directly (via `bash \"${SCRIPT_DIR}/check-vault-connectivity.sh\"`) for section 4 instead of reimplementing the throwaway-curl-pod logic, keeping a single source of truth for that check."
+        ],
+        "filesChanged": [
+          "scripts/verify-two-cluster.sh (created)",
+          "scripts/tests/test-verify-two-cluster-validation.sh (created)",
+          "Makefile (modified: added `verify-two-cluster` target + .PHONY entry)",
+          "tasks/vso-two-cluster-podman/README.md (marked task 11 done)"
+        ],
+        "blockers": [
+          "none — script complete",
+          "all 23 unit test assertions pass",
+          "full live end-to-end run verified against real two-cluster Podman-backed kind environment including rotation and reset",
+          "and all 8 test files in scripts/tests/ pass (91 total assertions across the suite)."
+        ],
+        "timestamp": "2026-07-10T04:51:30.910Z"
+      },
+      "toolUsage": {
+        "read": 0,
+        "write": 2,
+        "edit": 6,
+        "bash": 25,
+        "other": 1
+      },
+      "outputPreview": "## REFLECTION\nSUMMARY: Added `scripts/verify-two-cluster.sh`, a 7-section end-to-end verification script proving the two-cluster VSO demo works (contexts, Vault/VSO placement in each cluster, network reachability, real Kubernetes-auth login, VaultStaticSecret sync, and rotation), wired it up as `make verify-two-cluster`, and added a unit test suite; live-verified against the real `kind-vault-lab`/`kind-vso-lab` clusters including deliberate failure injection.\n\nFILES: scripts/verify-two-cluster.s\n... (truncated)",
+      "commitMessages": [
+        "chore:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "chore:",
+        "feat:",
+        "feat:",
+        "feat:"
+      ],
+      "commitSummary": "chore:; feat:; feat: (+2 more); feat:; chore:; feat: (+2 more)"
+    },
+    "12": {
       "status": "in_progress",
       "retries": 0,
-      "startedAt": "2026-07-10T04:46:31.087Z"
+      "startedAt": "2026-07-10T04:51:40.642Z"
     },
     "01": {
       "status": "completed",
@@ -508,7 +565,7 @@
     }
   },
   "startedAt": "2026-07-10T04:06:04.856Z",
-  "lastUpdatedAt": "2026-07-10T04:46:31.087Z",
+  "lastUpdatedAt": "2026-07-10T04:51:40.642Z",
   "paused": false,
   "prds": {
     "tasks-vso-two-cluster-podman-README-md": {
@@ -570,9 +627,66 @@
           "commitSummary": "feat:; feat:; feat: (+2 more); chore:; feat:; feat: (+2 more)"
         },
         "11": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:46:31.087Z",
+          "completedAt": "2026-07-10T04:51:40.641Z",
+          "durationMs": 299763,
+          "reflection": {
+            "taskId": "11",
+            "title": "add-two-cluster-verification",
+            "summary": "Added `scripts/verify-two-cluster.sh`, a 7-section end-to-end verification script proving the two-cluster VSO demo works (contexts, Vault/VSO placement in each cluster, network reachability, real Kubernetes-auth login, VaultStaticSecret sync, and rotation), wired it up as `make verify-two-cluster`, and added a unit test suite; live-verified against the real `kind-vault-lab`/`kind-vso-lab` clusters including deliberate failure injection.",
+            "keyLearnings": [
+              "- `kubectl create token <sa> --duration Xm` requires a minimum of 10 minutes (`may not specify a duration less than 10 minutes`) — used `10m` for the vso-demo SA JWT minted for the live auth/kubernetes-vso login check.",
+              "- Section 5 (kubernetes auth) does a *real* `vault write auth/kubernetes-vso/login role=vso-demo jwt=<minted-jwt>` and checks for `.auth.client_token` via `jq` — this proves actual auth works, not just that the mount exists.",
+              "- Section 6 compares `vault kv get -field=username kv-v2/vault-demo/mysecret` (Vault cluster) directly against the native Secret's base64-decoded value (VSO cluster) rather than hardcoding an expected string, so it's robust to whatever the current baseline is.",
+              "- Section 7 (rotation) always attempts to reset `kv-v2/vault-demo/mysecret` back to `BASELINE_USERNAME` even on the failure path (before calling `fail_section`), so a failed run never leaves the demo secret rotated; live-verified full round trip took ~6 poll attempts (~18s) with default `ROTATION_SLEEP=3`.",
+              "- Negative-placement checks (Vault absent from VSO cluster; VSO operator/CRDs/`vso-demo` namespace absent from Vault cluster) are asserted directly, matching the exit-criteria's \"negative placement\" requirement.",
+              "- `--check-only` only validates required commands + `require_contexts`, never touches a live cluster beyond that — matches the pattern used by every other script in `scripts/`.",
+              "- `--skip-rotation` flag lets `make verify-two-cluster`-style pre-demo checks run faster when the rotation window doesn't need re-proving every time.",
+              "- Full live run against real Podman-backed clusters took ~48s (with rotation); `--check-only` is near-instant; failure-path tests (bad `VAULT_ADDR`, bad `VSO_AUTH_ROLE`) were verified to fail at the correct section (4 and 5 respectively) with actionable diagnostics, and the baseline secret value (`larry`) was confirmed unchanged in both clusters afterward.",
+              "- Reused `scripts/check-vault-connectivity.sh` directly (via `bash \"${SCRIPT_DIR}/check-vault-connectivity.sh\"`) for section 4 instead of reimplementing the throwaway-curl-pod logic, keeping a single source of truth for that check."
+            ],
+            "filesChanged": [
+              "scripts/verify-two-cluster.sh (created)",
+              "scripts/tests/test-verify-two-cluster-validation.sh (created)",
+              "Makefile (modified: added `verify-two-cluster` target + .PHONY entry)",
+              "tasks/vso-two-cluster-podman/README.md (marked task 11 done)"
+            ],
+            "blockers": [
+              "none — script complete",
+              "all 23 unit test assertions pass",
+              "full live end-to-end run verified against real two-cluster Podman-backed kind environment including rotation and reset",
+              "and all 8 test files in scripts/tests/ pass (91 total assertions across the suite)."
+            ],
+            "timestamp": "2026-07-10T04:51:30.910Z"
+          },
+          "toolUsage": {
+            "read": 0,
+            "write": 2,
+            "edit": 6,
+            "bash": 25,
+            "other": 1
+          },
+          "outputPreview": "## REFLECTION\nSUMMARY: Added `scripts/verify-two-cluster.sh`, a 7-section end-to-end verification script proving the two-cluster VSO demo works (contexts, Vault/VSO placement in each cluster, network reachability, real Kubernetes-auth login, VaultStaticSecret sync, and rotation), wired it up as `make verify-two-cluster`, and added a unit test suite; live-verified against the real `kind-vault-lab`/`kind-vso-lab` clusters including deliberate failure injection.\n\nFILES: scripts/verify-two-cluster.s\n... (truncated)",
+          "commitMessages": [
+            "chore:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "chore:",
+            "feat:",
+            "feat:",
+            "feat:"
+          ],
+          "commitSummary": "chore:; feat:; feat: (+2 more); feat:; chore:; feat: (+2 more)"
+        },
+        "12": {
           "status": "in_progress",
           "retries": 0,
-          "startedAt": "2026-07-10T04:46:31.087Z"
+          "startedAt": "2026-07-10T04:51:40.642Z"
         },
         "01": {
           "status": "completed",
@@ -1021,7 +1135,7 @@
         }
       },
       "startedAt": "2026-07-10T04:06:04.856Z",
-      "lastUpdatedAt": "2026-07-10T04:46:31.087Z",
+      "lastUpdatedAt": "2026-07-10T04:51:40.642Z",
       "paused": false
     }
   }

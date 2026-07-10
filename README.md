@@ -190,20 +190,34 @@ End-to-end checklist to go from a clean machine to "ready to present."
 - `helm` installed.
 - The HashiCorp Helm chart repository available.
 
-### 2. Bootstrap a fresh cluster
+### 2. Bootstrap two Podman-backed kind clusters
+
+This repo runs **two** kind clusters, both backed by Podman:
+
+- `kind-vault-lab` (`VAULT_CONTEXT`) — runs Vault (and the Agent Injector /
+  OTel single-cluster demo) only.
+- `kind-vso-lab` (`VSO_CONTEXT`) — runs the Vault Secrets Operator, its CRDs,
+  and the `vso-demo-app` consumer only.
+
+Vault is never installed in the VSO cluster, and VSO/its CRDs/app are never
+installed in the Vault cluster. See [Architecture](#architecture-two-clusters)
+below.
 
 ```sh
 # Set Podman as the kind provider (add to ~/.zshrc or ~/.bashrc for persistence)
 export KIND_EXPERIMENTAL_PROVIDER=podman
 
-# Create and configure the cluster
-kind create cluster --name vault-lab
-kubectl config use-context kind-vault-lab
 helm repo add hashicorp https://helm.releases.hashicorp.com
 helm repo update
+
+# Create/validate both clusters (kind-vault-lab, kind-vso-lab) with the
+# host port mappings the two clusters need to reach each other.
+make clusters
 ```
 
-> **Note:** See [PODMAN_MIGRATION.md](PODMAN_MIGRATION.md) for detailed Podman setup instructions.
+> **Note:** See [PODMAN_MIGRATION.md](PODMAN_MIGRATION.md) for detailed
+> Podman setup instructions and the two-cluster networking assumptions
+> (`host.containers.internal`, host port mappings).
 
 ### 3. Build the demo environment
 
@@ -211,13 +225,31 @@ helm repo update
 make setup
 ```
 
-This runs `create_vault.sh`, which installs Vault and the Agent Injector,
-initialises and unseals Vault, configures Kubernetes auth, deploys the baseline
-secret demo, deploys the OTel metrics path, and runs two metrics checks. The
-script is idempotent — re-running it skips steps that are already done and
-re-injects the `vault-demo` sidecar.
+`make setup` runs the full two-cluster bootstrap end to end, targeting each
+cluster context explicitly (never the ambient `kubectl config
+current-context`):
 
-A successful run ends with:
+1. `scripts/create-clusters.sh` — create/validate `kind-vault-lab` and
+   `kind-vso-lab`.
+2. `scripts/setup-vault-cluster.sh` — install and configure Vault (Agent
+   Injector, `auth/kubernetes`, baseline secret, OTel path) in
+   `VAULT_CONTEXT` only.
+3. `scripts/setup-vso-cluster.sh` — install VSO and create the `vso-demo`
+   namespace/service accounts in `VSO_CONTEXT` only.
+4. `scripts/configure-vso-kubernetes-auth.sh` — configure Vault's dedicated
+   `auth/kubernetes-vso` mount (in the Vault cluster) against the VSO
+   cluster's API server, so Vault can validate VSO-cluster service account
+   JWTs.
+5. `scripts/apply-vso-demo.sh` — apply the VSO CRDs
+   (`VaultConnection`/`VaultAuth`/`VaultStaticSecret`) and `vso-demo-app` in
+   the VSO cluster.
+
+Each step is also available as its own Make target (`make clusters`,
+`make setup-vault`, `make setup-vso`, `make configure-vso-auth`,
+`make vso-apply`) if you want to run or re-run a single stage. All scripts
+are idempotent.
+
+A successful run ends with the single-cluster OTel path reporting:
 
 ```text
 Unauthenticated sys/metrics HTTP status: 403
@@ -225,16 +257,25 @@ Unauthenticated sys/metrics HTTP status: 403
 OpenTelemetry collector is configured to scrape Vault sys/metrics with bearer_token_file=/vault/secrets/token.
 ```
 
+and the VSO path reporting:
+
+```text
+Vault Secrets Operator demo is ready: kv-v2/vault-demo/mysecret is synced to native Secret vso-demo/vso-demo-mysecret.
+```
+
 ### 4. Pre-flight check
 
 Right before the customer joins:
 
 ```sh
-make verify    # confirms the cluster is ready
-make status    # shows the demo resources
+make verify              # confirms the single-cluster OTel/Agent Injector demo (VAULT_CONTEXT)
+make status              # shows those single-cluster demo resources
+make vso-verify           # confirms the VSO demo is synced end-to-end (VSO_CONTEXT)
+make verify-two-cluster   # full end-to-end proof across BOTH clusters (placement, network, auth, sync, rotation)
 ```
 
-You're ready to present when all four pods report `2/2 Running`:
+You're ready to present when, in the Vault cluster (`kind-vault-lab`), all
+four single-cluster demo pods report `2/2 Running`:
 
 ```text
 default/vault-0
@@ -243,14 +284,25 @@ observability/otel-collector-...
 observability/vault-metrics-check
 ```
 
+and, in the VSO cluster (`kind-vso-lab`), the VSO operator and `vso-demo-app`
+are `Running`/`1/1` with the `VaultStaticSecret` reporting `Ready: True`.
+
+`make verify-two-cluster` is the strongest single signal: it fails fast and
+names the exact section (contexts, placement, network reachability, real
+`auth/kubernetes-vso` login, synced Secret value, or rotation) if anything is
+wrong.
+
 ### 5. Optional polish
 
-- Open a second terminal with `kubectl get pods -A -w` for live visual feedback
-  during the talk.
-- If the cluster has been idle a while, re-run `make setup` — it's safe and
-  takes ~30s on an already-configured cluster.
-- For a totally fresh start: `kind delete cluster --name vault-lab` and return
-  to step 2. (Ensure `KIND_EXPERIMENTAL_PROVIDER=podman` is set).
+- Open a second terminal with
+  `kubectl --context kind-vault-lab get pods -A -w` and a third with
+  `kubectl --context kind-vso-lab get pods -A -w` for live visual feedback
+  from both clusters during the talk.
+- If the clusters have been idle a while, re-run `make setup` — it's safe and
+  fast on already-configured clusters.
+- For a totally fresh start:
+  `kind delete cluster --name vault-lab && kind delete cluster --name vso-lab`
+  and return to step 2. (Ensure `KIND_EXPERIMENTAL_PROVIDER=podman` is set).
 
 ## Presenter commands
 
@@ -258,24 +310,37 @@ The repository includes a guided demo driver so the live demo is easier to run
 than copying commands one by one.
 
 ```sh
-make help        # Show available commands
-make verify      # Check the cluster is ready for the demo
-make demo        # Start the guided live demo flow
-make status      # Show the Kubernetes resources used by the demo
-make vso-verify  # Check the Vault Secrets Operator demo is ready
-make vso-demo    # Start the guided VSO walkthrough
-make vso-status  # Show the VSO demo resources
+make help                 # Show all available commands
+make setup                # Full two-cluster bootstrap: clusters, Vault, VSO, cross-cluster auth, VSO apply
+make clusters              # Create/validate kind-vault-lab and kind-vso-lab only
+make setup-vault           # Install/configure Vault in VAULT_CONTEXT only
+make setup-vso             # Install VSO + vso-demo namespace/SAs in VSO_CONTEXT only
+make configure-vso-auth    # Configure auth/kubernetes-vso against the VSO cluster API server
+make vso-apply             # Apply VSO CRDs + vso-demo-app in VSO_CONTEXT
+make check-vault-connectivity  # Prove a VSO-cluster pod can reach Vault at VAULT_ADDR
+make verify-two-cluster    # Full end-to-end two-cluster proof (placement/network/auth/sync/rotation)
+make verify      # Check the single-cluster OTel/Agent Injector demo is ready (VAULT_CONTEXT)
+make demo        # Start the guided single-cluster live demo flow (Agent Injector/OTel)
+make status      # Show the Kubernetes resources used by the single-cluster demo
+make vso-verify  # Check the Vault Secrets Operator demo is ready (VSO_CONTEXT)
+make vso-demo    # Start the guided VSO walkthrough across both clusters
+make vso-status  # Show the VSO demo resources across both clusters
+make vso-deck    # Run the VSO demo as a presenterm slide deck
 ```
 
-Use `make demo` for the customer walkthrough. It pauses between sections and
-prints each command before running it, so the audience can follow both the story
-and the proof points. `make vso-demo` drives the separate Vault Secrets Operator
-walkthrough the same way.
+Use `make demo` for the single-cluster Agent Injector/OTel customer walkthrough
+(current `kubectl` context, normally `kind-vault-lab`). It pauses between
+sections and prints each command before running it, so the audience can
+follow both the story and the proof points. `make vso-demo` drives the
+separate Vault Secrets Operator walkthrough the same way, but always targets
+`VAULT_CONTEXT`/`VSO_CONTEXT` explicitly rather than the ambient context.
 
-## Live demo flow
+## Live demo flow (single-cluster Agent Injector/OTel demo)
 
-`make demo` walks through these same steps. The commands below are included as a
-reference if you prefer to drive the demo manually.
+`make demo` walks through these same steps, run against the Vault cluster
+(`kind-vault-lab`). The commands below are included as a reference if you
+prefer to drive the demo manually; make sure your current `kubectl` context
+is `kind-vault-lab` (or pass `--context kind-vault-lab` to each command).
 
 ### 1. Show the workloads
 
@@ -417,10 +482,15 @@ kubectl exec vault-demo -c vault-demo -- cat /vault/secrets/mysecret
 This is separate from the OTel metrics path. It is included as a simple baseline
 to show the Kubernetes auth flow before the metrics-specific example.
 
-## Vault Secrets Operator (VSO) demo
+## Vault Secrets Operator (VSO) demo: two clusters, cross-cluster auth
 
 This is a third, standalone demo (`make vso-demo`) that showcases a different
-secret-delivery model from the Agent Injector used above.
+secret-delivery model from the Agent Injector used above — and, unlike the
+single-cluster Agent Injector/OTel demo, it runs **Vault and VSO in two
+separate Podman-backed kind clusters**:
+
+- `kind-vault-lab` (`VAULT_CONTEXT`) — runs Vault only.
+- `kind-vso-lab` (`VSO_CONTEXT`) — runs VSO, its CRDs, and `vso-demo-app` only.
 
 Where the Agent Injector runs a **per-pod sidecar** that writes a secret to a
 **file** inside one pod, the **Vault Secrets Operator** runs a single
@@ -429,73 +499,145 @@ Where the Agent Injector runs a **per-pod sidecar** that writes a secret to a
 standard Kubernetes way (`envFrom`, `secretKeyRef`, volume mounts) with **no
 Vault annotations and no sidecar**.
 
+### Why two clusters
+
+A single-cluster VSO demo would only prove that VSO can talk to Vault when
+both run in the same Kubernetes API server and pod network. This demo proves
+the pattern customers actually need: **Vault and the consumers of its
+secrets often live in different clusters** (a central Vault cluster serving
+many downstream clusters). That requires:
+
+- Vault reachable from **outside** its own cluster, at a host-level address
+  (`VAULT_ADDR`, default `http://host.containers.internal:8200`) rather than
+  the in-cluster DNS name `vault.default.svc.cluster.local`.
+- A **separate** Vault Kubernetes auth mount, `auth/kubernetes-vso`, that
+  validates service account JWTs against the *VSO* cluster's API server
+  (`VSO_API_ADDR`, default `https://host.containers.internal:6444`) instead
+  of the Vault cluster's own API server. This is deliberately distinct from
+  the pre-existing `auth/kubernetes` mount used by the Agent Injector/OTel
+  demo, which only ever validates JWTs from the Vault cluster — mixing the
+  two would let a token minted in one cluster be replayed against the other.
+
 ### What the VSO demo proves
 
-- The Vault Secrets Operator runs once, cluster-wide.
+- Vault runs only in `kind-vault-lab`; VSO, its CRDs, and `vso-demo-app` run
+  only in `kind-vso-lab`.
+- The Vault Secrets Operator runs once, cluster-wide, in the VSO cluster.
 - Three CRDs declaratively describe the pipeline:
   `VaultConnection` → `VaultAuth` → `VaultStaticSecret`.
+- A pod in the VSO cluster can reach Vault at the documented external
+  address (`VAULT_ADDR`) across the Podman host network.
+- VSO authenticates through the dedicated `auth/kubernetes-vso` mount, which
+  performs a real Kubernetes TokenReview against the VSO cluster's API
+  server (`VSO_API_ADDR`) — not the Vault cluster's.
 - A Vault KV secret (`kv-v2/vault-demo/mysecret`) is materialized as a native
-  Kubernetes `Secret` (`vso-demo/vso-demo-mysecret`).
+  Kubernetes `Secret` (`vso-demo/vso-demo-mysecret`) in the VSO cluster.
 - A plain pod consumes it through `envFrom` with **zero** Vault configuration
   (the pod is `1/1`, not `2/2`, and carries no `vault.hashicorp.com`
   annotations).
 - VSO authenticates with a least-privilege identity: the dedicated `vso-demo`
-  Kubernetes auth role bound only to the `vso-demo/vso-demo` service account,
-  using the existing `mysecret` policy.
-- **Live rotation**: changing the value in Vault refreshes the Kubernetes
-  `Secret` automatically (within `refreshAfter`, set to 30s).
+  Kubernetes auth role bound only to the `vso-demo/vso-demo` service account
+  (in the VSO cluster), using the existing `mysecret` policy.
+- **Live rotation**: changing the value in Vault (in the Vault cluster)
+  refreshes the native Secret in the VSO cluster automatically (within
+  `refreshAfter`, set to 30s).
 
 ### Agent Injector vs Vault Secrets Operator
 
-| Aspect | Agent Injector (sidecar / OTel demos) | Vault Secrets Operator (this demo) |
+| Aspect | Agent Injector (sidecar / OTel demos, single-cluster) | Vault Secrets Operator (this demo, two clusters) |
 | --- | --- | --- |
-| Unit of deployment | Sidecar container per annotated pod | One operator Deployment per cluster |
+| Cluster topology | One cluster (`kind-vault-lab`) | Two clusters: Vault (`kind-vault-lab`) + VSO (`kind-vso-lab`) |
+| Unit of deployment | Sidecar container per annotated pod | One operator Deployment per (VSO) cluster |
 | Where the secret lands | A file inside the pod (`/vault/secrets/...`) | A native Kubernetes `Secret` object |
 | App consumption | Reads a file | Standard `envFrom` / `secretKeyRef` / volume |
 | Coupling to Vault | Pod needs Vault annotations | App needs **zero** Vault knowledge |
 | Config mechanism | Pod annotations | Kubernetes CRDs |
 | Pod shape | `2/2` (app + Vault Agent) | `1/1` (app only) |
+| Kubernetes auth mount | `auth/kubernetes` (validates Vault-cluster JWTs) | `auth/kubernetes-vso` (validates VSO-cluster JWTs) |
 
-### VSO architecture
+### VSO architecture (two clusters)
 
 ```text
-                      Vault (default/vault-0)
-                        auth/kubernetes ── role: vso-demo ── policy: mysecret
-                        kv-v2/vault-demo/mysecret
-                                  ^
-                                  | (3) login with SA JWT + read secret
-                                  |
-   vault-secrets-operator-system  |
-        VSO controller ───reconcile loop
-                                  |
-   vso-demo namespace             |
-        VaultConnection ─► VaultAuth ─► VaultStaticSecret
-                                            |
-                                            | (4) writes / refreshes
-                                            v
-                            Kubernetes Secret: vso-demo-mysecret
-                                            |
-                                            | (5) envFrom (standard K8s)
-                                            v
-                            Plain app pod: vso-demo-app (no Vault config)
+kind-vault-lab (VAULT_CONTEXT)                    kind-vso-lab (VSO_CONTEXT)
+┌───────────────────────────────────┐            ┌────────────────────────────────────────┐
+│ default/vault-0                   │            │ vault-secrets-operator-system           │
+│   auth/kubernetes-vso             │            │   VSO controller ── reconcile loop      │
+│     -> role vso-demo              │            │                                          │
+│     -> policy mysecret            │            │ vso-demo namespace                      │
+│   kv-v2/vault-demo/mysecret       │            │   VaultConnection ─► VaultAuth ─►        │
+│                                    │            │     VaultStaticSecret                   │
+│ NodePort/host port mapping:       │            │   ServiceAccounts: vso-demo,             │
+│   :8200 -> host.containers.internal│           │     vault-token-reviewer                 │
+└──────────────┬─────────────────────┘            └───────────────┬──────────────────────────┘
+               │ (1) VaultConnection points at                    │
+               │     VAULT_ADDR = http://host.containers.internal:8200
+               │◄──────────────────────────────────────────────────┘
+               │ (2) VaultAuth logs in: SA JWT for vso-demo/vso-demo
+               │     via auth/kubernetes-vso/login
+               ▼
+     Vault calls TokenReview against VSO_API_ADDR
+     (https://host.containers.internal:6444, the VSO cluster's API server,
+      reached via the vault-token-reviewer service account's JWT)
+               │ (3) on success: read kv-v2/vault-demo/mysecret
+               ▼
+     VSO writes/refreshes ──► Kubernetes Secret: vso-demo-mysecret (kind-vso-lab)
+                                            │
+                                            │ (4) envFrom (standard K8s)
+                                            ▼
+                            Plain app pod: vso-demo-app (no Vault config, kind-vso-lab)
 ```
 
 ### Resources created for the VSO demo
 
-`create_vault.sh` also provisions the VSO path (additive and idempotent):
+`make setup` (via `scripts/setup-vault-cluster.sh`,
+`scripts/setup-vso-cluster.sh`, `scripts/configure-vso-kubernetes-auth.sh`,
+and `scripts/apply-vso-demo.sh`) provisions the VSO path across both
+clusters, additively and idempotently:
 
-| Resource | Purpose |
-| --- | --- |
-| `vault-secrets-operator` Helm release (chart `1.4.0`) | Runs the operator in `vault-secrets-operator-system`. |
-| `vso-demo` namespace and service account | Dedicated identity VSO authenticates as. |
-| `vso-demo` Kubernetes auth role | Binds `vso-demo/vso-demo` to the `mysecret` policy. |
-| `VaultConnection/vso-demo-connection` | How VSO reaches Vault (in-cluster URL). |
-| `VaultAuth/vso-demo-auth` | Reuses the `kubernetes` auth method with role `vso-demo`. |
-| `VaultStaticSecret/vso-demo-mysecret` | Syncs `kv-v2/vault-demo/mysecret` → native Secret. |
-| `vso-demo/vso-demo-mysecret` Secret | The materialized native Kubernetes Secret. |
-| `vso-demo/vso-demo-app` pod | Plain consumer using `envFrom` (no Vault config). |
+| Resource | Cluster | Purpose |
+| --- | --- | --- |
+| Vault NodePort/host port mapping (`VAULT_ADDR`) | `kind-vault-lab` | Exposes Vault at `http://host.containers.internal:8200`, reachable from the VSO cluster. |
+| `auth/kubernetes-vso` mount | `kind-vault-lab` | Dedicated Kubernetes auth mount validated against the VSO cluster's API server, separate from `auth/kubernetes`. |
+| `auth/kubernetes-vso/role/vso-demo` | `kind-vault-lab` | Binds `vso-demo/vso-demo` (VSO cluster) to the `mysecret` policy. |
+| `vault-token-reviewer` service account + `system:auth-delegator` binding | `kind-vso-lab` | Identity Vault uses to call the VSO cluster's TokenReview API. |
+| `vault-secrets-operator` Helm release (chart `1.4.0`) | `kind-vso-lab` | Runs the operator in `vault-secrets-operator-system`. |
+| `vso-demo` namespace and service account | `kind-vso-lab` | Dedicated identity VSO authenticates as. |
+| `VaultConnection/vso-demo-connection` | `kind-vso-lab` | How VSO reaches Vault: the external `VAULT_ADDR`, not an in-cluster URL. |
+| `VaultAuth/vso-demo-auth` | `kind-vso-lab` | Uses mount `kubernetes-vso`, role `vso-demo`. |
+| `VaultStaticSecret/vso-demo-mysecret` | `kind-vso-lab` | Syncs `kv-v2/vault-demo/mysecret` → native Secret. |
+| `vso-demo/vso-demo-mysecret` Secret | `kind-vso-lab` | The materialized native Kubernetes Secret. |
+| `vso-demo/vso-demo-app` pod | `kind-vso-lab` | Plain consumer using `envFrom` (no Vault config). |
 
 ### Key VSO manifests
+
+`VaultConnection` points at the external Vault address, not an in-cluster URL:
+
+```yaml
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: vso-demo-connection
+  namespace: vso-demo
+spec:
+  address: http://host.containers.internal:8200
+```
+
+`VaultAuth` uses the dedicated `kubernetes-vso` mount:
+
+```yaml
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vso-demo-auth
+  namespace: vso-demo
+spec:
+  vaultConnectionRef: vso-demo-connection
+  method: kubernetes
+  mount: kubernetes-vso
+  kubernetes:
+    role: vso-demo
+    serviceAccount: vso-demo
+```
 
 `VaultStaticSecret` ties it all together:
 
@@ -537,25 +679,31 @@ spec:
 
 ### Run the VSO demo
 
-The VSO path is provisioned by the same `make setup` (it is folded into
-`create_vault.sh`). Once setup has completed:
+The VSO path is provisioned by the same `make setup` (or the individual
+`make setup-vault`, `make setup-vso`, `make configure-vso-auth`,
+`make vso-apply` targets). Once setup has completed:
 
 ```sh
-make vso-verify    # Confirm the operator, CRDs, synced Secret, and app pod
-make vso-demo      # Start the guided VSO walkthrough
-make vso-status    # Show the VSO demo resources
+make check-vault-connectivity  # Prove a VSO-cluster pod can reach Vault at VAULT_ADDR
+make vso-verify                # Confirm the operator, CRDs, synced Secret, and app pod (VSO_CONTEXT)
+make vso-demo                  # Start the guided VSO walkthrough across both clusters
+make vso-status                # Show the VSO demo resources across both clusters
+make verify-two-cluster        # Full end-to-end proof: placement, network, auth, sync, rotation
 ```
 
 `make vso-demo` walks through nine sections, pausing between each: intro,
 architecture, operator running, the CRDs, the synced native Secret, the plain
 app consuming it, the least-privilege identity, a **live rotation**, and a
-summary. Set `NO_WAIT=true` to run it without pauses (useful for a dry run):
+summary. Every command in the walkthrough targets `VAULT_CONTEXT` or
+`VSO_CONTEXT` explicitly via `--context`, so it works correctly regardless of
+your ambient `kubectl config current-context`. Set `NO_WAIT=true` to run it
+without pauses (useful for a dry run):
 
 ```sh
 NO_WAIT=true make vso-demo
 ```
 
-A successful `make setup` ends the VSO block with:
+A successful `make setup` (or `make vso-apply`) ends the VSO block with:
 
 ```text
 Vault Secrets Operator demo is ready: kv-v2/vault-demo/mysecret is synced to native Secret vso-demo/vso-demo-mysecret.
@@ -610,13 +758,15 @@ otel-collector
 
 ### Vault is sealed
 
-This demo script initialises and unseals Vault during setup. On first run it
-saves the unseal keys and root token to `vault-init-keys.json` (gitignored,
-`chmod 600`, demo-only).
+This demo's setup scripts initialise and unseal Vault (in `VAULT_CONTEXT`,
+default `kind-vault-lab`) during setup. On first run they save the unseal
+keys and root token to `vault-init-keys.json` (gitignored, `chmod 600`,
+demo-only).
 
-If the Vault pod restarts and comes back **sealed**, just re-run `make setup`.
-The script detects the "initialized but sealed" state and automatically unseals
-Vault from `vault-init-keys.json` — no cluster rebuild required.
+If the Vault pod restarts and comes back **sealed**, just re-run
+`make setup` (or `make setup-vault` to only re-run the Vault cluster step).
+The script detects the "initialized but sealed" state and automatically
+unseals Vault from `vault-init-keys.json` — no cluster rebuild required.
 
 If that file is missing (for example, the cluster was created by an older
 version of the script that did not persist keys), the keys are unrecoverable.
@@ -624,7 +774,8 @@ Use a fresh disposable cluster:
 
 ```sh
 kind delete cluster --name vault-lab
-kind create cluster --name vault-lab
+export KIND_EXPERIMENTAL_PROVIDER=podman
+make clusters
 helm repo add hashicorp https://helm.releases.hashicorp.com && helm repo update
 make setup
 ```
@@ -637,39 +788,49 @@ make setup
 
 ### VSO Secret never appears (`vso-demo-mysecret`)
 
-Check the `VaultStaticSecret` status and the operator logs:
+Check the `VaultStaticSecret` status and the operator logs, both in the VSO
+cluster:
 
 ```sh
-kubectl describe vaultstaticsecret vso-demo-mysecret -n vso-demo
-kubectl logs -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator --tail=80
+kubectl --context kind-vso-lab describe vaultstaticsecret vso-demo-mysecret -n vso-demo
+kubectl --context kind-vso-lab logs -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator --tail=80
 ```
 
 Common causes:
 
-- The `vso-demo` Kubernetes auth role is missing or not bound to the
-  `vso-demo/vso-demo` service account. Confirm with:
+- The `vso-demo` role under `auth/kubernetes-vso` (in the **Vault** cluster,
+  not `auth/kubernetes`) is missing or not bound to the `vso-demo/vso-demo`
+  service account (in the **VSO** cluster). Confirm with:
 
   ```sh
-  kubectl exec vault-0 -- vault read auth/kubernetes/role/vso-demo
+  kubectl --context kind-vault-lab exec vault-0 -- vault read auth/kubernetes-vso/role/vso-demo
   ```
 
 - The `mysecret` policy does not grant read on
   `kv-v2/data/vault-demo/mysecret`.
+- The `VaultConnection` still points at an in-cluster URL
+  (`vault.default.svc.cluster.local`) instead of the external `VAULT_ADDR`
+  (`http://host.containers.internal:8200`) — that only resolves inside the
+  Vault cluster, never from the VSO cluster.
+- Run `make check-vault-connectivity` to isolate whether this is a network
+  reachability problem (see below) versus an auth/policy problem.
 
 ### VSO rotation does not update the Secret
 
 The `VaultStaticSecret` uses `refreshAfter: 30s`, so allow up to ~30 seconds.
-Force a faster check by inspecting the operator logs or re-reading the Secret:
+Force a faster check by inspecting the operator logs or re-reading the Secret
+in the VSO cluster:
 
 ```sh
-kubectl get secret vso-demo-mysecret -n vso-demo \
+kubectl --context kind-vso-lab get secret vso-demo-mysecret -n vso-demo \
   -o jsonpath='{.data.username}' | base64 -d; echo
 ```
 
-If a previous run left the value as `larry-rotated-N`, re-seed it:
+If a previous run left the value as `larry-rotated-N`, re-seed it in the
+Vault cluster:
 
 ```sh
-kubectl exec vault-0 -- vault kv put kv-v2/vault-demo/mysecret username=larry
+kubectl --context kind-vault-lab exec vault-0 -- vault kv put kv-v2/vault-demo/mysecret username=larry
 ```
 
 ### App pod value does not match the Secret after rotation
@@ -680,16 +841,85 @@ object after Vault changes; it does not mutate environment variables inside an
 already-running process. Recreate the pod after the Secret syncs if you need the
 process environment to pick up the latest value.
 
+### Podman networking: a VSO-cluster pod cannot reach Vault
+
+`make check-vault-connectivity` (or section 4 of `make verify-two-cluster`)
+runs a throwaway pod in the VSO cluster that curls `VAULT_ADDR`
+(`http://host.containers.internal:8200` by default). If that fails:
+
+- Confirm `podman machine` is running (macOS): `podman machine list`. If it
+  is stopped, `podman machine start` and re-run `make setup`.
+- Confirm `KIND_EXPERIMENTAL_PROVIDER=podman` was set for **both**
+  `kind create cluster` invocations (i.e. `make clusters` was run with it
+  exported) — a mixed Docker/Podman pair of clusters will not share the
+  `host.containers.internal` gateway.
+- Confirm Vault's NodePort/host port mapping (`VAULT_HOST_PORT`, default
+  `8200`) is actually bound on the host: `podman machine ssh -- sudo ss -ltnp | grep 8200`
+  (or use the `kind` cluster's control-plane container port mapping).
+- `host.containers.internal` is a Podman-specific DNS name for the host
+  gateway. If you switch back to a Docker-backed provider, the equivalent is
+  `host.docker.internal` — override `TWO_CLUSTER_HOST` accordingly rather
+  than editing scripts.
+
+### Vault login through `auth/kubernetes-vso` fails with an expired/invalid reviewer token
+
+`scripts/configure-vso-kubernetes-auth.sh` mints the `token_reviewer_jwt`
+used by `auth/kubernetes-vso/config` via `kubectl create token` (demo-only
+limitation: this JWT is **not** auto-refreshed by Kubernetes or Vault; see
+the comments at the top of that script). Default TTL is `8760h` (1 year),
+but if you've overridden `VSO_REVIEWER_TOKEN_TTL` to something shorter, or
+enough time has passed:
+
+```sh
+make configure-vso-auth   # re-mints a fresh reviewer JWT and rewrites auth/kubernetes-vso/config
+```
+
+This is safe to re-run at any time; it does not disturb any other Vault
+configuration (including the pre-existing `auth/kubernetes` mount).
+
+### VSO reconciliation failures / CrashLoopBackOff in the VSO cluster
+
+```sh
+kubectl --context kind-vso-lab get pods -n vault-secrets-operator-system
+kubectl --context kind-vso-lab describe pod -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator
+kubectl --context kind-vso-lab logs -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator --tail=200
+```
+
+Look for TokenReview/RBAC errors (missing `vault-token-reviewer`
+`system:auth-delegator` binding — re-run `make setup-vso`), Vault connection
+timeouts (see the Podman networking section above), or `403`s from Vault
+(see the reviewer-token section above).
+
+### Resource pressure from running two clusters
+
+Two kind clusters (each with a control-plane container plus Vault or VSO
+workloads) use noticeably more CPU/memory than one. If Podman machine
+resources are constrained:
+
+- Increase the Podman machine's CPU/memory before demoing:
+  `podman machine set --cpus 4 --memory 8192` (stop/start the machine for
+  this to take effect).
+- Delete unrelated kind clusters you aren't using for this demo.
+- `make vso-status` and `kubectl --context <ctx> top pods -A` (if
+  `metrics-server` is installed) can help identify which workload is under
+  pressure.
+- If a laptop genuinely cannot run both clusters concurrently, this two-
+  cluster topology is not optional for this demo — it is the entire point
+  (Vault and VSO consumers must be provably separate clusters) — so plan
+  demo hardware accordingly rather than collapsing back to one cluster.
+
 ## Cleanup
 
 ```sh
 kind delete cluster --name vault-lab
+kind delete cluster --name vso-lab
 ```
 
-(With `KIND_EXPERIMENTAL_PROVIDER=podman` set, this cleans up the Podman-based cluster).
+(With `KIND_EXPERIMENTAL_PROVIDER=podman` set, this cleans up both
+Podman-based clusters.)
 
-If you used another disposable Kubernetes cluster, delete the cluster or remove
-the demo resources using your normal cluster cleanup process.
+If you used other disposable Kubernetes clusters, delete them or remove the
+demo resources using your normal cluster cleanup process.
 
 ## Key takeaway
 

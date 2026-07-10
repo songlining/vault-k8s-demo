@@ -1,9 +1,22 @@
 # Design: Vault Secrets Operator (VSO) Demo
 
-**Status:** Draft for review
+**Status:** Draft for review (superseded on cluster topology, see note below)
 **Author:** Larry Song
 **Date:** 2026-05-30
 **Target:** `make vso-demo`
+
+> **Superseded note:** This document originally designed the VSO demo as a
+> **single-cluster** scenario reusing the existing `auth/kubernetes` mount
+> (see "Auth method: Reuse `auth/kubernetes`" below). The implemented demo
+> now runs Vault and VSO in **two separate Podman-backed kind clusters**
+> (`kind-vault-lab` and `kind-vso-lab`) with a dedicated
+> `auth/kubernetes-vso` mount validated against the VSO cluster's API
+> server. The rest of this document (CRD choice, rotation story, goals,
+> non-goals, walkthrough narrative) remains accurate. For the current
+> cluster topology and cross-cluster networking/auth design, see
+> [`vso-two-cluster-podman-plan.md`](./vso-two-cluster-podman-plan.md) and
+> [`vso-two-cluster-audit.md`](./vso-two-cluster-audit.md), and for
+> user-facing instructions see the top-level [`README.md`](../README.md).
 
 ---
 

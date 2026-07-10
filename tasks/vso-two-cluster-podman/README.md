@@ -17,7 +17,7 @@ Tasks
 - [x] 09 — update-make-targets → `09-update-make-targets.md`
 - [x] 10 — update-demo-scripts → `10-update-demo-scripts.md`
 - [x] 11 — add-two-cluster-verification → `11-add-two-cluster-verification.md`
-- [ ] 12 — update-documentation-and-slides → `12-update-documentation-and-slides.md`
+- [x] 12 — update-documentation-and-slides → `12-update-documentation-and-slides.md`
 
 Dependencies
 
