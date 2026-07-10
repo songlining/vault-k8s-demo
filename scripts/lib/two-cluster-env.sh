@@ -52,6 +52,13 @@ TWO_CLUSTER_HOST="${TWO_CLUSTER_HOST:-host.containers.internal}"
 VAULT_HOST_PORT="${VAULT_HOST_PORT:-8200}"
 VAULT_ADDR="${VAULT_ADDR:-http://${TWO_CLUSTER_HOST}:${VAULT_HOST_PORT}}"
 
+# NodePort Vault's Kubernetes Service listens on inside the Vault cluster.
+# The Vault cluster's kind config maps this 1:1 to VAULT_HOST_PORT via
+# extraPortMappings (see scripts/kind/vault-lab-config.yaml.tmpl and
+# scripts/create-clusters.sh). Task 05 (expose-vault-cross-cluster) creates
+# the actual NodePort Service using this port.
+VAULT_NODE_PORT="${VAULT_NODE_PORT:-30820}"
+
 # Host port the VSO cluster's API server is mapped to, and the address Vault
 # uses to reach it for Kubernetes auth TokenReview requests.
 VSO_API_HOST_PORT="${VSO_API_HOST_PORT:-6444}"
@@ -268,7 +275,10 @@ print_two_cluster_env() {
   cat <<EOF
 VAULT_CONTEXT=$VAULT_CONTEXT
 VSO_CONTEXT=$VSO_CONTEXT
+VAULT_KIND_CLUSTER_NAME=$VAULT_KIND_CLUSTER_NAME
+VSO_KIND_CLUSTER_NAME=$VSO_KIND_CLUSTER_NAME
 VAULT_ADDR=$VAULT_ADDR
+VAULT_NODE_PORT=$VAULT_NODE_PORT
 VSO_API_ADDR=$VSO_API_ADDR
 NAMESPACE=$NAMESPACE
 OBSERVABILITY_NAMESPACE=$OBSERVABILITY_NAMESPACE
