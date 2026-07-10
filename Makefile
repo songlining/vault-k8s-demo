@@ -1,4 +1,4 @@
-.PHONY: help setup clusters setup-vault setup-vso configure-vso-auth vso-apply \
+.PHONY: help setup clusters setup-vault setup-vso configure-vso-auth configure-vso-jwt-auth vso-apply \
         demo verify status logs-otel logs-agent \
         vso-demo vso-deck vso-verify vso-status logs-vso \
         check-vault-connectivity verify-two-cluster
@@ -33,11 +33,11 @@ help: ## Show available demo commands
 
 ## --- Two-cluster setup (Podman-backed kind) ------------------------------
 
-setup: ## Run the full two-cluster setup: clusters, Vault, VSO, cross-cluster auth, VSO demo apply
+setup: ## Run the full two-cluster setup: clusters, Vault, VSO, JWT/OIDC cross-cluster auth, VSO demo apply
 	@bash scripts/create-clusters.sh
 	@bash scripts/setup-vault-cluster.sh
 	@bash scripts/setup-vso-cluster.sh
-	@bash scripts/configure-vso-kubernetes-auth.sh
+	@bash scripts/configure-vso-jwt-auth.sh
 	@bash scripts/apply-vso-demo.sh
 
 clusters: ## Create/validate the kind-vault-lab and kind-vso-lab Podman-backed kind clusters
@@ -49,8 +49,10 @@ setup-vault: ## Install and configure Vault in the Vault cluster (VAULT_CONTEXT)
 setup-vso: ## Install VSO and create vso-demo namespace/service accounts in the VSO cluster (VSO_CONTEXT) only
 	@bash scripts/setup-vso-cluster.sh
 
-configure-vso-auth: ## Configure Vault's dedicated auth/kubernetes-vso mount against the VSO cluster API server
-	@bash scripts/configure-vso-kubernetes-auth.sh
+configure-vso-auth: configure-vso-jwt-auth ## Alias for configure-vso-jwt-auth (default JWT/OIDC auth setup, compatibility entry point)
+
+configure-vso-jwt-auth: ## Configure Vault's dedicated auth/jwt-vso JWT/OIDC mount against the VSO cluster's JWKS endpoint (default VSO auth setup)
+	@bash scripts/configure-vso-jwt-auth.sh
 
 vso-apply: ## Apply VSO CRDs (VaultConnection/VaultAuth/VaultStaticSecret) and vso-demo-app in the VSO cluster
 	@bash scripts/apply-vso-demo.sh
