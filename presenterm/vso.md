@@ -44,34 +44,42 @@ running across **two separate Podman-backed kind clusters** — Vault in
 1 — Architecture: two clusters, cross-cluster auth
 =================================================
 
-Vault runs in one cluster; VSO runs in another. VSO reaches Vault over the
-Podman host network, and Vault validates VSO's identity by calling back into
-the VSO cluster's own API server.
+Vault runs in one cluster; VSO runs in another. The important point is the
+trust boundary: the auth method lives in Vault, but validates JWTs against the
+VSO cluster's own API server.
 
-```
- kind-vault-lab (VAULT_CONTEXT)              kind-vso-lab (VSO_CONTEXT)
- ┌───────────────────────────────┐           ┌────────────────────────────────────┐
- │ default/vault-0                │           │ vault-secrets-operator-system       │
- │  auth/kubernetes-vso           │           │   VSO Controller (cluster-wide)     │
- │    role vso-demo → policy      │           │        │ watches / reconciles       │
- │    mysecret                    │           │ vso-demo ns                          │
- │  kv-v2/vault-demo/mysecret     │           │   VaultConnection → VaultAuth →      │
- │                                 │           │     VaultStaticSecret                │
- │ NodePort → host.containers     │           │        │ syncs into                  │
- │   .internal:8200 (VAULT_ADDR)  │           │   Secret: vso-demo-mysecret          │
- └───────────────┬─────────────────┘           │        │ envFrom (standard K8s)      │
-                 │                             │   Pod: vso-demo-app (1/1, no        │
-                 │ (1) VaultConnection →        │        sidecar, no Vault config)    │
-                 │     VAULT_ADDR              └────────────────┬────────────────────┘
-                 │◄─────────────────────────────────────────────┘
-                 │ (2) VaultAuth login: SA JWT via auth/kubernetes-vso
-                 ▼
-     Vault calls TokenReview against VSO_API_ADDR
-     (the VSO cluster's own API server, via vault-token-reviewer SA)
-                 │ (3) on success: read kv-v2/vault-demo/mysecret
-                 ▼
-     VSO writes/refreshes the native Secret every refreshAfter (30s)
-```
+<!-- column_layout: [1, 1] -->
+
+<!-- column: 0 -->
+
+**Vault cluster**
+
+`kind-vault-lab`
+
+- `vault-0`
+- `auth/kubernetes-vso`
+- role `vso-demo` → policy `mysecret`
+- `kv-v2/vault-demo/mysecret`
+- exposed at `host.containers.internal:8200`
+
+<!-- column: 1 -->
+
+**VSO cluster**
+
+`kind-vso-lab`
+
+- VSO controller runs cluster-wide
+- `VaultConnection` → `VaultAuth` → `VaultStaticSecret`
+- native Secret `vso-demo-mysecret`
+- pod `vso-demo-app` is `1/1`
+- no sidecar, no Vault annotations
+
+<!-- reset_layout -->
+
+**Cross-cluster flow**
+
+`VaultConnection` → `VAULT_ADDR` → `auth/kubernetes-vso` →
+`TokenReview @ VSO_API_ADDR` → native Kubernetes Secret
 
 <!-- speaker_note: This is not a same-cluster shortcut -- Vault and VSO are provably different kind clusters, connected only through host.containers.internal and a dedicated auth/kubernetes-vso mount. It watches CRDs you define, logs into Vault on your behalf, and syncs secrets into native Kubernetes Secret objects. The app consumes via envFrom, secretKeyRef, or a volume mount -- zero Vault awareness. -->
 
@@ -229,15 +237,72 @@ kubectl --context kind-vso-lab get pod vso-demo-app -n vso-demo
 
 <!-- end_slide -->
 
-6 — Least-privilege Vault identity
-=================================
+6 — Set up cross-cluster Kubernetes auth
+========================================
 
-VSO authenticates as a dedicated, narrowly-scoped Kubernetes auth role,
-bound to the VSO cluster's own service account -- read from the Vault
-cluster:
+This is the customer-facing setup step: configure a **Vault auth method in
+the Vault cluster** that validates service account JWTs against the
+**VSO cluster's** API server.
 
 ```bash +exec
-kubectl --context kind-vault-lab exec vault-0 -n default -- vault read auth/kubernetes-vso/role/vso-demo | grep -E 'bound_service_account_names|bound_service_account_namespaces|token_policies|policies'
+set -euo pipefail
+[ -f scripts/configure-vso-kubernetes-auth.sh ] || cd ..
+bash scripts/configure-vso-kubernetes-auth.sh > /tmp/vso-auth-setup.out 2>&1
+awk '
+  /^==> Configuring/ ||
+  /^    Vault cluster/ ||
+  /^    VSO cluster/ ||
+  /^    Auth mount/ ||
+  /^    VSO API address/ ||
+  /^==> Minting reviewer JWT/ ||
+  /^==> Writing auth\/kubernetes-vso/ ||
+  /^auth\/kubernetes-vso is configured/ ||
+  /^cluster.s API server/ ||
+  /^service account/ ||
+  /^Reviewer JWT expires/
+' /tmp/vso-auth-setup.out
+```
+
+Watch for the important asymmetry in the output: **auth is hosted in
+`kind-vault-lab`, but configured against `kind-vso-lab`**.
+
+<!-- speaker_note: This is the key customer question -- Vault is not using its own cluster's Kubernetes API here. The auth method lives in Vault, but TokenReview is delegated to the other cluster's API server. -->
+
+<!-- end_slide -->
+
+6b — Verify the cross-cluster trust boundary
+===========================================
+
+First, the reviewer identity exists in the **VSO cluster** and can perform
+TokenReview through `system:auth-delegator`:
+
+```bash +exec
+kubectl --context kind-vso-lab -n vso-demo get sa vault-token-reviewer vso-demo
+kubectl --context kind-vso-lab get clusterrolebinding vault-token-reviewer-auth-delegator \
+  -o custom-columns=NAME:.metadata.name,ROLE:.roleRef.name,SA:.subjects[0].name,NS:.subjects[0].namespace
+```
+
+Then, the Vault auth method lives in the **Vault cluster**, but points at the
+**VSO cluster** API server:
+
+```bash +exec
+kubectl --context kind-vault-lab exec vault-0 -n default -- \
+  vault read -format=json auth/kubernetes-vso/config | \
+  jq -r '.data | "kubernetes_host=\(.kubernetes_host)\ndisable_iss_validation=\(.disable_iss_validation)"'
+```
+
+<!-- end_slide -->
+
+6c — Least-privilege Vault identity
+==================================
+
+The role maps only the VSO cluster's `vso-demo/vso-demo` service account to
+the narrow `mysecret` policy:
+
+```bash +exec
+kubectl --context kind-vault-lab exec vault-0 -n default -- \
+  vault read auth/kubernetes-vso/role/vso-demo | \
+  grep -E 'bound_service_account_names|bound_service_account_namespaces|token_policies|policies'
 ```
 
 The `mysecret` policy only allows reading this one KV path:
@@ -246,14 +311,9 @@ The `mysecret` policy only allows reading this one KV path:
 kubectl --context kind-vault-lab exec vault-0 -n default -- vault policy read mysecret
 ```
 
-**Key points**
-
-- The role only maps `vso-demo/vso-demo` (in the **VSO** cluster) to the
-  `mysecret` policy.
-- The policy grants read on a single KV path and nothing else.
-- This lives under `auth/kubernetes-vso`, a mount dedicated to validating
-  VSO-cluster identities -- separate from the same-cluster `auth/kubernetes`
-  mount used elsewhere in this repo.
+**Key point:** `auth/kubernetes-vso` is the cross-cluster auth mount. The
+existing same-cluster `auth/kubernetes` mount remains separate for the Agent
+Injector demo path.
 
 <!-- end_slide -->
 
@@ -310,7 +370,7 @@ done
 echo 'ERROR: Secret did not sync to larry-rotated-1' >&2; exit 1
 ```
 
-<!-- speaker_note: No pod restart, no manual sync -- VSO watches Vault across the cluster boundary and updates the Secret. This is the highlight of the demo: the rotation happened in a completely different cluster from the one running the app. -->
+<!-- speaker_note: No pod restart, no manual sync -- VSO watches Vault across the cluster boundary and updates the Secret. This is the highlight of the demo -- the rotation happened in a completely different cluster from the one running the app. -->
 
 <!-- end_slide -->
 
