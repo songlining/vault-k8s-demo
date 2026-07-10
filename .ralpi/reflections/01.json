@@ -1,0 +1,18 @@
+{
+  "taskId": "01",
+  "title": "audit-single-cluster-assumptions",
+  "summary": "Audited every setup script, Make target, manifest, and doc for single-cluster assumptions in the Vault/VSO demo and wrote a categorized audit at `docs/vso-two-cluster-audit.md`, mapping each finding to the specific downstream task (02–12) responsible for fixing it.",
+  "keyLearnings": [
+    "- The single hard blocker for the migration is `create_vault.sh`'s VSO `VaultConnection.spec.address: http://vault.${NAMESPACE}.svc.cluster.local:8200` — this in-cluster DNS name only resolves inside kind-vault-lab and must become the external address (task 05/06/08).",
+    "- Only one Kubernetes auth mount (`auth/kubernetes`) exists today, configured against the Vault cluster's own API server via `$KUBERNETES_SERVICE_HOST/PORT` inside a `kubectl exec` into the Vault pod. The `vso-demo` role is currently bound to this same-cluster mount — it must move to a new `auth/kubernetes-vso` mount configured against the VSO cluster's API server (task 07). The existing `auth/kubernetes` mount and its `vault-demo`/`otel-vault-metrics` roles must NOT be touched — they're intentionally out of scope (Agent Injector + OTel demo paths stay entirely in the Vault cluster).",
+    "- `vso-demo.sh`, `demo.sh`, `presenterm/vso.md`, and `Makefile` targets all issue `kubectl` with zero `--context` flags — every occurrence needs `VAULT_CONTEXT`/`VSO_CONTEXT` split (tasks 03, 09, 10, 12). `demo.sh` (Agent Injector demo) is explicitly out of scope for context-splitting.",
+    "- No `make verify-two-cluster` target exists yet; `verify`/`vso-verify` only ever check one context today (task 11 must add the new target).",
+    "- README's VSO architecture diagram and `PODMAN_MIGRATION.md` both depict/describe a single cluster and need full rewrites, not incremental edits (task 12).",
+    "- `docs/vso-demo-design.md` exists but wasn't audited line-by-line in this task — flagged for task 12 follow-up.",
+    "- No `memory` tool was available in this session's toolset; learnings are captured in the audit doc itself and this reflection for downstream tasks to reference."
+  ],
+  "filesChanged": [
+    "docs/vso-two-cluster-audit.md (created)"
+  ],
+  "timestamp": "2026-07-10T04:08:26.105Z"
+}

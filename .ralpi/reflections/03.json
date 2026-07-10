@@ -1,0 +1,18 @@
+{
+  "taskId": "03",
+  "title": "add-shared-context-and-preflight-helpers",
+  "summary": "Created `scripts/lib/two-cluster-env.sh`, a shared Bash helper library defining all VAULT_CONTEXT/VSO_CONTEXT-based defaults (contexts, addresses, namespaces, chart versions, resource names) plus reusable preflight functions (`require_commands`, `require_context(s)`, `kubectl_vault`/`kubectl_vso`, `helm_vault`/`helm_vso`, `preflight_two_cluster_network`, `print_two_cluster_env`) for later setup/demo/verify scripts to source.",
+  "keyLearnings": [
+    "- Canonical names/defaults centralized here: `VAULT_CONTEXT=kind-vault-lab`, `VSO_CONTEXT=kind-vso-lab`, `VAULT_KIND_CLUSTER_NAME=vault-lab`, `VSO_KIND_CLUSTER_NAME=vso-lab`, `TWO_CLUSTER_HOST=host.containers.internal`, `VAULT_HOST_PORT=8200` → `VAULT_ADDR=http://host.containers.internal:8200`, `VSO_API_HOST_PORT=6444` → `VSO_API_ADDR=https://host.containers.internal:6444` (matches the plan doc's recommended demo ports).",
+    "- Namespaces reused from `create_vault.sh` verbatim: `NAMESPACE=default`, `OBSERVABILITY_NAMESPACE=observability`, `VSO_NAMESPACE=vso-demo`, `VSO_OPERATOR_NAMESPACE=vault-secrets-operator-system`. `VSO_CHART_VERSION=1.4.0` carried over as the existing pinned version; `VAULT_CHART_VERSION` left blank/overrideable since `create_vault.sh` doesn't currently pin one.",
+    "- New cross-cluster auth naming: `VSO_AUTH_MOUNT=kubernetes-vso`, `VSO_AUTH_ROLE=vso-demo`, `VAULT_TOKEN_REVIEWER_SA=vault-token-reviewer` — these are the names task 07 (auth mount) and task 06/08 (VSO cluster RBAC) should use so everything stays consistent.",
+    "- `context_exists`/`require_context`/`require_contexts` use `kubectl config get-contexts -o name` (never `current-context`) per the acceptance criteria — this is the correctness-independent check other tasks must keep using.",
+    "- Wrapper functions `kubectl_vault`/`kubectl_vso`/`helm_vault`/`helm_vso` are the documented pattern downstream scripts (tasks 04, 06, 07, 09, 10, 11) should call instead of raw `kubectl --context ...`/`helm --kube-context ...`.",
+    "- `preflight_two_cluster_network` is best-effort/non-fatal for things it can't fully verify from the host (e.g., in-pod reachability of `host.containers.internal`) — full reachability proof is deferred to `make verify-two-cluster` (task 11).",
+    "- Tested with a fake `kubectl` shim since this environment has no real kubectl/kind installed; all four required scenarios (both contexts present, missing command, renamed/missing context, same-context-for-both) produce clear, actionable pass/fail output."
+  ],
+  "filesChanged": [
+    "scripts/lib/two-cluster-env.sh (created)"
+  ],
+  "timestamp": "2026-07-10T04:10:21.723Z"
+}

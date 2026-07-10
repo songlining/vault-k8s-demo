@@ -1,0 +1,20 @@
+{
+  "taskId": "06",
+  "title": "refactor-vso-cluster-setup",
+  "summary": "Created `scripts/setup-vso-cluster.sh`, a context-aware script that installs the Vault Secrets Operator, creates the `vso-demo` namespace with `vso-demo`/`vault-token-reviewer` service accounts, and grants TokenReview RBAC (`system:auth-delegator`) — all scoped exclusively to `VSO_CONTEXT` (`kind-vso-lab`) via the shared `kubectl_vso`/`helm_vso` wrappers, with no Vault auth config or VSO CRDs applied. Verified live end-to-end against real Podman-backed kind clusters.",
+  "keyLearnings": [
+    "- Followed the `--check-only` pattern established by `scripts/create-clusters.sh` (task 02): validates `require_commands kubectl helm` and `require_context \"$VSO_CONTEXT\"` before doing any real work, and exits early with `--check-only` for safe testing.",
+    "- Only requires `VSO_CONTEXT` to exist (not `require_contexts`, which checks both) — this script's job is VSO-cluster-only setup, so it should not fail if the Vault cluster isn't up yet.",
+    "- RBAC choice: bound `vault-token-reviewer` SA to the built-in `system:auth-delegator` ClusterRole (same pattern `create_vault.sh` used for the Vault SA itself) — this grants both TokenReview and SubjectAccessReview, the standard binding for Kubernetes-auth reviewer identities. Binding name: `vault-token-reviewer-auth-delegator`.",
+    "- Reused all naming/constants from `scripts/lib/two-cluster-env.sh` (task 03): `VSO_OPERATOR_NAMESPACE=vault-secrets-operator-system`, `VSO_NAMESPACE=vso-demo`, `VSO_CHART_VERSION=1.4.0`, `VAULT_TOKEN_REVIEWER_SA=vault-token-reviewer`. No new env vars introduced.",
+    "- Deliberately does NOT configure `auth/kubernetes-vso` in Vault or apply `VaultConnection`/`VaultAuth`/`VaultStaticSecret` CRDs — that's explicitly deferred to later tasks (07/08) per the task notes, keeping this script pure cluster/RBAC scaffolding.",
+    "- Verified live: script is idempotent (rerun shows `unchanged`/upgrade to revision 2 without errors), never reads or mutates the caller's current kubectl context (tested by running with `current-context=kind-vault-lab` and confirming it stays unchanged and VSO still installs correctly in `kind-vso-lab`), and `kind-vault-lab` has no `vault-secrets-operator-system` or `vso-demo` namespace after the run.",
+    "- A sibling script `scripts/setup-vault-cluster.sh` (untracked, presumably from a parallel task 04/05 run) already exists with matching conventions/comments referencing this script by name — no naming conflicts.",
+    "- Test script includes a regression guard: greps the script for any bare `kubectl`/`helm` invocation not going through `kubectl_vso`/`helm_vso` (watch for macOS/BSD grep needing `[[:space:]]` instead of `\\s`, and anchoring `^[0-9]+:` after `grep -n` line-number prefixes when filtering comment lines)."
+  ],
+  "filesChanged": [
+    "scripts/setup-vso-cluster.sh (created)",
+    "scripts/tests/test-setup-vso-cluster-validation.sh (created)"
+  ],
+  "timestamp": "2026-07-10T04:20:35.380Z"
+}

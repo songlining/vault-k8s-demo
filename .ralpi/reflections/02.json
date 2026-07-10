@@ -1,0 +1,26 @@
+{
+  "taskId": "02",
+  "title": "add-two-cluster-kind-bootstrap",
+  "summary": "Added `scripts/create-clusters.sh` (deterministic, idempotent Podman-backed kind two-cluster bootstrap) plus versioned kind config templates for `kind-vault-lab`/`kind-vso-lab`, reusing task 03's `scripts/lib/two-cluster-env.sh` for shared context/port variables, and validated the full flow live (clusters created, reused on rerun, ports and cert SANs correct).",
+  "keyLearnings": [
+    "- Task 03 (`scripts/lib/two-cluster-env.sh`) had already landed in this repo (parallel DAG execution — 03 only depends on 01, not 02) before I started. I refactored `create-clusters.sh` to source it rather than introducing a duplicate `scripts/lib/ports.sh`, reusing its `VAULT_CONTEXT`, `VSO_CONTEXT`, `VAULT_KIND_CLUSTER_NAME`, `VSO_KIND_CLUSTER_NAME`, `TWO_CLUSTER_HOST`, `VAULT_HOST_PORT`, `VSO_API_HOST_PORT`, and `require_commands`. Downstream tasks (04+) should keep sourcing `scripts/lib/two-cluster-env.sh` as the single source of truth for these names/ports — I only added `VAULT_NODE_PORT=30820` to it (task 05 will create the actual Vault NodePort Service on this port).",
+    "- Kind config templates live at `scripts/kind/*.yaml.tmpl` using literal `${VAR}` placeholders substituted by `sed` in `create-clusters.sh` (no `envsubst` dependency — not guaranteed present on all machines). Edit the templates + `two-cluster-env.sh` together if the port contract changes.",
+    "- **Critical environment finding**: `kind get clusters` (and anything using kind's podman provider list path, e.g. `preflight_two_cluster_network` in `two-cluster-env.sh`) is broken with podman client 6.0.0 — `podman ps --format '{{index .Labels \"key\"}}'` fails because podman 6's ps format renders `.Labels` as a flat comma string, not a map, so `index` fails with `exit status 125`. I upgraded `kind` 0.29.0 → 0.32.0 via brew, which did NOT fix this (it's a podman-side format change, not a kind-version issue). **`create-clusters.sh` therefore does NOT use `kind get clusters` for idempotency** — instead it attempts `kind create cluster` directly and treats kind's own `\"node(s) already exist\"` stderr message as the reuse signal. Any future script that calls `kind get clusters` on this machine/podman version will also fail; prefer `kubectl config get-contexts <ctx>` or `podman ps --filter label=...` (without `index`) for cluster-existence checks instead.",
+    "- Verified live: `kind-vault-lab` maps container NodePort 30820 → host port 8200; `kind-vso-lab`'s API server listens on host port 6444 with `host.containers.internal` (plus `localhost`/`127.0.0.1`) baked into the serving cert's SAN list (confirmed via `openssl s_client`/`x509`). Both `kind-vault-lab` and `kind-vso-lab` contexts exist in kubeconfig; script never changes the caller's current-context.",
+    "- Both real kind clusters (`vault-lab`, `vso-lab`) are left running in this environment for downstream tasks (04+) to build on."
+  ],
+  "filesChanged": [
+    "scripts/create-clusters.sh (created)",
+    "scripts/kind/vault-lab-config.yaml.tmpl (created)",
+    "scripts/kind/vso-lab-config.yaml.tmpl (created)",
+    "scripts/tests/test-create-clusters-validation.sh (created)",
+    "scripts/lib/two-cluster-env.sh (modified — added `VAULT_NODE_PORT` and included it/cluster names in `print_two_cluster_env`)"
+  ],
+  "blockers": [
+    "none — clusters are up",
+    "idempotent reruns confirmed",
+    "unit validation tests (5/5) pass",
+    "and the port/cert-SAN networking contract is verified against the live containers."
+  ],
+  "timestamp": "2026-07-10T04:16:16.552Z"
+}

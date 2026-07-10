@@ -2,26 +2,616 @@
   "sourcePath": "/Users/larry.song/work/hashicorp/vault-k8s-demo/tasks/vso-two-cluster-podman/README.md",
   "tasks": {
     "01": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:06:39.579Z",
+      "completedAt": "2026-07-10T04:08:52.789Z",
+      "durationMs": 106404,
+      "reflection": {
+        "taskId": "01",
+        "title": "audit-single-cluster-assumptions",
+        "summary": "Audited every setup script, Make target, manifest, and doc for single-cluster assumptions in the Vault/VSO demo and wrote a categorized audit at `docs/vso-two-cluster-audit.md`, mapping each finding to the specific downstream task (02–12) responsible for fixing it.",
+        "keyLearnings": [
+          "- The single hard blocker for the migration is `create_vault.sh`'s VSO `VaultConnection.spec.address: http://vault.${NAMESPACE}.svc.cluster.local:8200` — this in-cluster DNS name only resolves inside kind-vault-lab and must become the external address (task 05/06/08).",
+          "- Only one Kubernetes auth mount (`auth/kubernetes`) exists today, configured against the Vault cluster's own API server via `$KUBERNETES_SERVICE_HOST/PORT` inside a `kubectl exec` into the Vault pod. The `vso-demo` role is currently bound to this same-cluster mount — it must move to a new `auth/kubernetes-vso` mount configured against the VSO cluster's API server (task 07). The existing `auth/kubernetes` mount and its `vault-demo`/`otel-vault-metrics` roles must NOT be touched — they're intentionally out of scope (Agent Injector + OTel demo paths stay entirely in the Vault cluster).",
+          "- `vso-demo.sh`, `demo.sh`, `presenterm/vso.md`, and `Makefile` targets all issue `kubectl` with zero `--context` flags — every occurrence needs `VAULT_CONTEXT`/`VSO_CONTEXT` split (tasks 03, 09, 10, 12). `demo.sh` (Agent Injector demo) is explicitly out of scope for context-splitting.",
+          "- No `make verify-two-cluster` target exists yet; `verify`/`vso-verify` only ever check one context today (task 11 must add the new target).",
+          "- README's VSO architecture diagram and `PODMAN_MIGRATION.md` both depict/describe a single cluster and need full rewrites, not incremental edits (task 12).",
+          "- `docs/vso-demo-design.md` exists but wasn't audited line-by-line in this task — flagged for task 12 follow-up.",
+          "- No `memory` tool was available in this session's toolset; learnings are captured in the audit doc itself and this reflection for downstream tasks to reference."
+        ],
+        "filesChanged": [
+          "docs/vso-two-cluster-audit.md (created)"
+        ],
+        "timestamp": "2026-07-10T04:08:26.105Z"
+      },
+      "toolUsage": {
+        "read": 6,
+        "write": 1,
+        "edit": 0,
+        "bash": 6,
+        "other": 1
+      },
+      "outputPreview": "## REFLECTION\nSUMMARY: Audited every setup script, Make target, manifest, and doc for single-cluster assumptions in the Vault/VSO demo and wrote a categorized audit at `docs/vso-two-cluster-audit.md`, mapping each finding to the specific downstream task (02–12) responsible for fixing it.\nFILES: docs/vso-two-cluster-audit.md (created)\n\nLEARNINGS:\n- The single hard blocker for the migration is `create_vault.sh`'s VSO `VaultConnection.spec.address: http://vault.${NAMESPACE}.svc.cluster.local:8200` \n... (truncated)",
+      "commitMessages": [
+        "Improve",
+        "Add",
+        "Add",
+        "docs:",
+        "Make",
+        "docs:",
+        "Improve",
+        "Add",
+        "Add",
+        "docs:"
+      ],
+      "commitSummary": "Improve; Add; Add (+2 more); docs:; Improve; Add (+2 more)"
+    },
+    "02": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:08:52.790Z",
+      "completedAt": "2026-07-10T04:17:01.717Z",
+      "durationMs": 443672,
+      "reflection": {
+        "taskId": "02",
+        "title": "add-two-cluster-kind-bootstrap",
+        "summary": "Added `scripts/create-clusters.sh` (deterministic, idempotent Podman-backed kind two-cluster bootstrap) plus versioned kind config templates for `kind-vault-lab`/`kind-vso-lab`, reusing task 03's `scripts/lib/two-cluster-env.sh` for shared context/port variables, and validated the full flow live (clusters created, reused on rerun, ports and cert SANs correct).",
+        "keyLearnings": [
+          "- Task 03 (`scripts/lib/two-cluster-env.sh`) had already landed in this repo (parallel DAG execution — 03 only depends on 01, not 02) before I started. I refactored `create-clusters.sh` to source it rather than introducing a duplicate `scripts/lib/ports.sh`, reusing its `VAULT_CONTEXT`, `VSO_CONTEXT`, `VAULT_KIND_CLUSTER_NAME`, `VSO_KIND_CLUSTER_NAME`, `TWO_CLUSTER_HOST`, `VAULT_HOST_PORT`, `VSO_API_HOST_PORT`, and `require_commands`. Downstream tasks (04+) should keep sourcing `scripts/lib/two-cluster-env.sh` as the single source of truth for these names/ports — I only added `VAULT_NODE_PORT=30820` to it (task 05 will create the actual Vault NodePort Service on this port).",
+          "- Kind config templates live at `scripts/kind/*.yaml.tmpl` using literal `${VAR}` placeholders substituted by `sed` in `create-clusters.sh` (no `envsubst` dependency — not guaranteed present on all machines). Edit the templates + `two-cluster-env.sh` together if the port contract changes.",
+          "- **Critical environment finding**: `kind get clusters` (and anything using kind's podman provider list path, e.g. `preflight_two_cluster_network` in `two-cluster-env.sh`) is broken with podman client 6.0.0 — `podman ps --format '{{index .Labels \"key\"}}'` fails because podman 6's ps format renders `.Labels` as a flat comma string, not a map, so `index` fails with `exit status 125`. I upgraded `kind` 0.29.0 → 0.32.0 via brew, which did NOT fix this (it's a podman-side format change, not a kind-version issue). **`create-clusters.sh` therefore does NOT use `kind get clusters` for idempotency** — instead it attempts `kind create cluster` directly and treats kind's own `\"node(s) already exist\"` stderr message as the reuse signal. Any future script that calls `kind get clusters` on this machine/podman version will also fail; prefer `kubectl config get-contexts <ctx>` or `podman ps --filter label=...` (without `index`) for cluster-existence checks instead.",
+          "- Verified live: `kind-vault-lab` maps container NodePort 30820 → host port 8200; `kind-vso-lab`'s API server listens on host port 6444 with `host.containers.internal` (plus `localhost`/`127.0.0.1`) baked into the serving cert's SAN list (confirmed via `openssl s_client`/`x509`). Both `kind-vault-lab` and `kind-vso-lab` contexts exist in kubeconfig; script never changes the caller's current-context.",
+          "- Both real kind clusters (`vault-lab`, `vso-lab`) are left running in this environment for downstream tasks (04+) to build on."
+        ],
+        "filesChanged": [
+          "scripts/create-clusters.sh (created)",
+          "scripts/kind/vault-lab-config.yaml.tmpl (created)",
+          "scripts/kind/vso-lab-config.yaml.tmpl (created)",
+          "scripts/tests/test-create-clusters-validation.sh (created)",
+          "scripts/lib/two-cluster-env.sh (modified — added `VAULT_NODE_PORT` and included it/cluster names in `print_two_cluster_env`)"
+        ],
+        "blockers": [
+          "none — clusters are up",
+          "idempotent reruns confirmed",
+          "unit validation tests (5/5) pass",
+          "and the port/cert-SAN networking contract is verified against the live containers."
+        ],
+        "timestamp": "2026-07-10T04:16:16.552Z"
+      },
+      "toolUsage": {
+        "read": 0,
+        "write": 8,
+        "edit": 4,
+        "bash": 44,
+        "other": 0
+      },
+      "outputPreview": "## REFLECTION\nSUMMARY: Added `scripts/create-clusters.sh` (deterministic, idempotent Podman-backed kind two-cluster bootstrap) plus versioned kind config templates for `kind-vault-lab`/`kind-vso-lab`, reusing task 03's `scripts/lib/two-cluster-env.sh` for shared context/port variables, and validated the full flow live (clusters created, reused on rerun, ports and cert SANs correct).\n\nFILES: scripts/create-clusters.sh (created), scripts/kind/vault-lab-config.yaml.tmpl (created), scripts/kind/vso-\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "docs:",
+        "Improve",
+        "Add",
+        "Add",
+        "feat:",
+        "feat:",
+        "docs:",
+        "Improve",
+        "Add"
+      ],
+      "commitSummary": "feat:; docs:; Improve (+2 more); feat:; feat:; docs: (+2 more)"
+    },
+    "03": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:08:52.791Z",
+      "completedAt": "2026-07-10T04:10:50.104Z",
+      "durationMs": 88869,
+      "reflection": {
+        "taskId": "03",
+        "title": "add-shared-context-and-preflight-helpers",
+        "summary": "Created `scripts/lib/two-cluster-env.sh`, a shared Bash helper library defining all VAULT_CONTEXT/VSO_CONTEXT-based defaults (contexts, addresses, namespaces, chart versions, resource names) plus reusable preflight functions (`require_commands`, `require_context(s)`, `kubectl_vault`/`kubectl_vso`, `helm_vault`/`helm_vso`, `preflight_two_cluster_network`, `print_two_cluster_env`) for later setup/demo/verify scripts to source.",
+        "keyLearnings": [
+          "- Canonical names/defaults centralized here: `VAULT_CONTEXT=kind-vault-lab`, `VSO_CONTEXT=kind-vso-lab`, `VAULT_KIND_CLUSTER_NAME=vault-lab`, `VSO_KIND_CLUSTER_NAME=vso-lab`, `TWO_CLUSTER_HOST=host.containers.internal`, `VAULT_HOST_PORT=8200` → `VAULT_ADDR=http://host.containers.internal:8200`, `VSO_API_HOST_PORT=6444` → `VSO_API_ADDR=https://host.containers.internal:6444` (matches the plan doc's recommended demo ports).",
+          "- Namespaces reused from `create_vault.sh` verbatim: `NAMESPACE=default`, `OBSERVABILITY_NAMESPACE=observability`, `VSO_NAMESPACE=vso-demo`, `VSO_OPERATOR_NAMESPACE=vault-secrets-operator-system`. `VSO_CHART_VERSION=1.4.0` carried over as the existing pinned version; `VAULT_CHART_VERSION` left blank/overrideable since `create_vault.sh` doesn't currently pin one.",
+          "- New cross-cluster auth naming: `VSO_AUTH_MOUNT=kubernetes-vso`, `VSO_AUTH_ROLE=vso-demo`, `VAULT_TOKEN_REVIEWER_SA=vault-token-reviewer` — these are the names task 07 (auth mount) and task 06/08 (VSO cluster RBAC) should use so everything stays consistent.",
+          "- `context_exists`/`require_context`/`require_contexts` use `kubectl config get-contexts -o name` (never `current-context`) per the acceptance criteria — this is the correctness-independent check other tasks must keep using.",
+          "- Wrapper functions `kubectl_vault`/`kubectl_vso`/`helm_vault`/`helm_vso` are the documented pattern downstream scripts (tasks 04, 06, 07, 09, 10, 11) should call instead of raw `kubectl --context ...`/`helm --kube-context ...`.",
+          "- `preflight_two_cluster_network` is best-effort/non-fatal for things it can't fully verify from the host (e.g., in-pod reachability of `host.containers.internal`) — full reachability proof is deferred to `make verify-two-cluster` (task 11).",
+          "- Tested with a fake `kubectl` shim since this environment has no real kubectl/kind installed; all four required scenarios (both contexts present, missing command, renamed/missing context, same-context-for-both) produce clear, actionable pass/fail output."
+        ],
+        "filesChanged": [
+          "scripts/lib/two-cluster-env.sh (created)"
+        ],
+        "timestamp": "2026-07-10T04:10:21.723Z"
+      },
+      "toolUsage": {
+        "read": 0,
+        "write": 1,
+        "edit": 0,
+        "bash": 9,
+        "other": 0
+      },
+      "outputPreview": "The shared helper file `scripts/lib/two-cluster-env.sh` is complete and validated:\n\n- Syntax check passes (`bash -n`)\n- Sourcing it and calling `print_two_cluster_env` prints all required variables with correct defaults\n- All required functions exist (`require_commands`, `require_context`, `require_contexts`, `kubectl_vault`, `kubectl_vso`, `helm_vault`, `helm_vso`, `preflight_two_cluster_network`, `print_two_cluster_env`)\n- Missing-command test fails with an actionable message naming the comman\n... (truncated)",
+      "commitMessages": [
+        "docs:",
+        "Improve",
+        "Add",
+        "Add",
+        "docs:",
+        "feat:",
+        "docs:",
+        "Improve",
+        "Add",
+        "Add"
+      ],
+      "commitSummary": "docs:; Improve; Add (+2 more); feat:; docs:; Improve (+2 more)"
+    },
+    "04": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:17:01.718Z",
+      "completedAt": "2026-07-10T04:23:38.511Z",
+      "durationMs": 370042,
+      "reflection": {
+        "taskId": "04",
+        "title": "refactor-vault-cluster-setup",
+        "summary": "Created `scripts/setup-vault-cluster.sh`, a context-aware, idempotent extraction of the Vault-only setup logic from `create_vault.sh` (Helm install, init/unseal, kv-v2 seeding, policies, same-cluster Agent Injector + OTel demo), explicitly excluding all VSO/VSO CRD/cross-cluster auth installation; validated live end-to-end against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters.",
+        "keyLearnings": [
+          "- The script sources `scripts/lib/two-cluster-env.sh` and uses only `kubectl_vault`/`helm_vault` wrappers (never raw `kubectl`/`helm`) — every operation targets `VAULT_CONTEXT` explicitly, verified to work correctly with current-context set to an unrelated cluster (`kind-tfe`).",
+          "- Preserved `KEYS_FILE`/`vault-init-keys.json` behavior verbatim, including the sealed-but-initialized recovery path and the fresh-init path; only updated the recovery hint text to reference `scripts/create-clusters.sh` instead of raw `kind create cluster`.",
+          "- Deliberately excludes: VSO Helm install, `vso-demo`/`vault-secrets-operator-system` namespaces, VSO CRDs (`VaultConnection`/`VaultAuth`/`VaultStaticSecret`), `vso-demo-app` pod, and the `vso-demo` auth role/`auth/kubernetes-vso` mount — these are explicitly deferred to later tasks (06/07/08) per `docs/vso-two-cluster-audit.md`. The pre-existing `auth/kubernetes` mount (same-cluster, Agent Injector/OTel) is preserved untouched and must not be confused with the future cross-cluster `auth/kubernetes-vso` mount.",
+          "- Live environment already had a `vault-secrets-operator-system`/`vso-demo` namespace+pod present in `kind-vso-lab` from earlier ad-hoc testing (not caused by this task) — confirmed this script never touches `kind-vso-lab` at all.",
+          "- Encountered a Podman VM root-disk-full issue (`no space left on device` during image pull) unrelated to this script; resolved via `podman system prune -af` freeing ~13.7GB. Future tasks running on this same environment/VM should watch for recurring low disk space (VM disk is only 12GiB).",
+          "- `create_vault.sh` (the original monolithic script) and `Makefile`'s `setup` target were intentionally left unmodified — out of scope for this task; likely task 09's job to rewire `make setup` to call `scripts/setup-vault-cluster.sh` (and a future `scripts/setup-vso-cluster.sh`) instead."
+        ],
+        "filesChanged": [
+          "scripts/setup-vault-cluster.sh (created)"
+        ],
+        "blockers": [
+          "none — script is complete",
+          "idempotent",
+          "and validated live against both real clusters."
+        ],
+        "timestamp": "2026-07-10T04:23:11.833Z"
+      },
+      "toolUsage": {
+        "read": 4,
+        "write": 1,
+        "edit": 0,
+        "bash": 21,
+        "other": 2
+      },
+      "outputPreview": "## Summary\n\nCreated `scripts/setup-vault-cluster.sh`, extracting the Vault-only portion of `create_vault.sh` into a context-aware, idempotent script that sources `scripts/lib/two-cluster-env.sh` (from task 03) and routes every `kubectl`/`helm` call through the `kubectl_vault`/`helm_vault` wrappers (`--context`/`--kube-context \"$VAULT_CONTEXT\"`).\n\n**What it does:** installs Vault via Helm, waits for `vault-0`, initializes/unseals (idempotent, recovers from `vault-init-keys.json`), enables the fil\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "feat:",
+        "feat:",
+        "docs:",
+        "Improve",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "docs:"
+      ],
+      "commitSummary": "feat:; feat:; feat: (+2 more); feat:; feat:; feat: (+2 more)"
+    },
+    "06": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:17:01.719Z",
+      "completedAt": "2026-07-10T04:21:29.295Z",
+      "durationMs": 213598,
+      "reflection": {
+        "taskId": "06",
+        "title": "refactor-vso-cluster-setup",
+        "summary": "Created `scripts/setup-vso-cluster.sh`, a context-aware script that installs the Vault Secrets Operator, creates the `vso-demo` namespace with `vso-demo`/`vault-token-reviewer` service accounts, and grants TokenReview RBAC (`system:auth-delegator`) — all scoped exclusively to `VSO_CONTEXT` (`kind-vso-lab`) via the shared `kubectl_vso`/`helm_vso` wrappers, with no Vault auth config or VSO CRDs applied. Verified live end-to-end against real Podman-backed kind clusters.",
+        "keyLearnings": [
+          "- Followed the `--check-only` pattern established by `scripts/create-clusters.sh` (task 02): validates `require_commands kubectl helm` and `require_context \"$VSO_CONTEXT\"` before doing any real work, and exits early with `--check-only` for safe testing.",
+          "- Only requires `VSO_CONTEXT` to exist (not `require_contexts`, which checks both) — this script's job is VSO-cluster-only setup, so it should not fail if the Vault cluster isn't up yet.",
+          "- RBAC choice: bound `vault-token-reviewer` SA to the built-in `system:auth-delegator` ClusterRole (same pattern `create_vault.sh` used for the Vault SA itself) — this grants both TokenReview and SubjectAccessReview, the standard binding for Kubernetes-auth reviewer identities. Binding name: `vault-token-reviewer-auth-delegator`.",
+          "- Reused all naming/constants from `scripts/lib/two-cluster-env.sh` (task 03): `VSO_OPERATOR_NAMESPACE=vault-secrets-operator-system`, `VSO_NAMESPACE=vso-demo`, `VSO_CHART_VERSION=1.4.0`, `VAULT_TOKEN_REVIEWER_SA=vault-token-reviewer`. No new env vars introduced.",
+          "- Deliberately does NOT configure `auth/kubernetes-vso` in Vault or apply `VaultConnection`/`VaultAuth`/`VaultStaticSecret` CRDs — that's explicitly deferred to later tasks (07/08) per the task notes, keeping this script pure cluster/RBAC scaffolding.",
+          "- Verified live: script is idempotent (rerun shows `unchanged`/upgrade to revision 2 without errors), never reads or mutates the caller's current kubectl context (tested by running with `current-context=kind-vault-lab` and confirming it stays unchanged and VSO still installs correctly in `kind-vso-lab`), and `kind-vault-lab` has no `vault-secrets-operator-system` or `vso-demo` namespace after the run.",
+          "- A sibling script `scripts/setup-vault-cluster.sh` (untracked, presumably from a parallel task 04/05 run) already exists with matching conventions/comments referencing this script by name — no naming conflicts.",
+          "- Test script includes a regression guard: greps the script for any bare `kubectl`/`helm` invocation not going through `kubectl_vso`/`helm_vso` (watch for macOS/BSD grep needing `[[:space:]]` instead of `\\s`, and anchoring `^[0-9]+:` after `grep -n` line-number prefixes when filtering comment lines)."
+        ],
+        "filesChanged": [
+          "scripts/setup-vso-cluster.sh (created)",
+          "scripts/tests/test-setup-vso-cluster-validation.sh (created)"
+        ],
+        "timestamp": "2026-07-10T04:20:35.380Z"
+      },
+      "toolUsage": {
+        "read": 1,
+        "write": 2,
+        "edit": 3,
+        "bash": 23,
+        "other": 0
+      },
+      "outputPreview": "## REFLECTION\nSUMMARY: Created `scripts/setup-vso-cluster.sh`, a context-aware script that installs the Vault Secrets Operator, creates the `vso-demo` namespace with `vso-demo`/`vault-token-reviewer` service accounts, and grants TokenReview RBAC (`system:auth-delegator`) — all scoped exclusively to `VSO_CONTEXT` (`kind-vso-lab`) via the shared `kubectl_vso`/`helm_vso` wrappers, with no Vault auth config or VSO CRDs applied. Verified live end-to-end against real Podman-backed kind clusters.\n\nFILE\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "feat:",
+        "docs:",
+        "Improve",
+        "Add",
+        "feat:",
+        "feat:",
+        "feat:",
+        "docs:",
+        "Improve"
+      ],
+      "commitSummary": "feat:; feat:; docs: (+2 more); feat:; feat:; feat: (+2 more)"
+    },
+    "05": {
       "status": "in_progress",
       "retries": 0,
-      "startedAt": "2026-07-10T04:06:39.579Z"
+      "startedAt": "2026-07-10T04:23:38.512Z"
+    },
+    "07": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:23:38.513Z",
+      "completedAt": "2026-07-10T04:27:08.618Z",
+      "durationMs": 171326,
+      "reflection": {
+        "taskId": "07",
+        "title": "configure-vso-kubernetes-auth",
+        "summary": "Created `scripts/configure-vso-kubernetes-auth.sh`, an idempotent, context-explicit script that enables and configures a dedicated `auth/kubernetes-vso` Vault Kubernetes auth mount validated against the VSO cluster's API server, writes the least-privilege `vso-demo` role, and was validated live end-to-end (auth enable, config, role write, and a real cross-cluster JWT login returning the `mysecret` policy).",
+        "keyLearnings": [
+          "- Reviewer JWT is minted via `kubectl create token vault-token-reviewer -n vso-demo --duration 8760h` (using `kubectl_vso`), not a static Secret-bound SA token — simpler on modern Kubernetes and documented as a demo-only limitation (not auto-refreshed; re-running the script mints a fresh one and rewrites `auth/kubernetes-vso/config`, which is otherwise a safe, idempotent operation).",
+          "- The VSO cluster's API server CA is read directly from the local kubeconfig (`kubectl config view --raw` for `VSO_CONTEXT`'s cluster entry, base64-decoded), not from inside a VSO-cluster pod — this works because kind's kubeconfig embeds the same CA that signs the API server cert whose SANs include `TWO_CLUSTER_HOST` (set up in task 02/03). This is the one intentional bare `kubectl` call in the script (context-agnostic by design), everything else goes through `kubectl_vault`/`kubectl_vso`.",
+          "- `vault write auth/<mount>/config kubernetes_ca_cert=\"$MULTILINE_PEM\"` works fine passed straight through `kubectl exec ... -- vault write ...` (no `sh -c`) since kubectl exec forwards argv elements as-is without shell re-parsing, so embedded newlines in a quoted bash variable survive intact.",
+          "- `auth/kubernetes-vso/role/vso-demo` is bound only to SA `vso-demo` in namespace `vso-demo` (VSO_NAMESPACE) with `policies=mysecret` only (no `default` policy on the role — Vault still adds Vault's own `default` policy automatically at login, which is expected and fine, verified in `token_policies=[\"default\",\"mysecret\"]` from an actual login response).",
+          "- Live-verified against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters (already set up by tasks 04/06): `vault auth list` shows `kubernetes-vso/` alongside the untouched same-cluster `kubernetes/` mount; a fresh SA token minted from `kind-vso-lab`'s `vso-demo` SA logs in successfully via `auth/kubernetes-vso/login` and receives the `mysecret` policy; re-running the script is fully idempotent (mount stays enabled, config/role rewritten cleanly, login still works afterward).",
+          "- Follows the same script conventions as tasks 02/04/06: sources `scripts/lib/two-cluster-env.sh`, supports `--check-only`/`-h`/`--help`, uses `require_commands`/`require_contexts`, and ships a matching `scripts/tests/*-validation.sh` unit test (10/10 passing) that also greps for accidental bare `kubectl` calls and any reference to the same-cluster `auth/kubernetes/` mount."
+        ],
+        "filesChanged": [
+          "scripts/configure-vso-kubernetes-auth.sh (created)",
+          "scripts/tests/test-configure-vso-kubernetes-auth-validation.sh (created)"
+        ],
+        "blockers": [
+          "none — script is complete",
+          "idempotent",
+          "and validated live end-to-end including a real cross-cluster Vault login."
+        ],
+        "timestamp": "2026-07-10T04:26:29.932Z"
+      },
+      "toolUsage": {
+        "read": 0,
+        "write": 2,
+        "edit": 0,
+        "bash": 24,
+        "other": 0
+      },
+      "outputPreview": "New files created cleanly alongside prior tasks' output (task 05's `check-vault-connectivity.sh` was already present from earlier work). My changes are isolated to the two new files for this task.\n\n## REFLECTION\nSUMMARY: Created `scripts/configure-vso-kubernetes-auth.sh`, an idempotent, context-explicit script that enables and configures a dedicated `auth/kubernetes-vso` Vault Kubernetes auth mount validated against the VSO cluster's API server, writes the least-privilege `vso-demo` role, and wa\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "docs:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:"
+      ],
+      "commitSummary": "feat:; feat:; feat: (+2 more); feat:; feat:; feat: (+2 more)"
     }
   },
   "startedAt": "2026-07-10T04:06:04.856Z",
-  "lastUpdatedAt": "2026-07-10T04:06:39.579Z",
+  "lastUpdatedAt": "2026-07-10T04:27:08.618Z",
   "paused": false,
   "prds": {
     "tasks-vso-two-cluster-podman-README-md": {
       "sourcePath": "/Users/larry.song/work/hashicorp/vault-k8s-demo/tasks/vso-two-cluster-podman/README.md",
       "tasks": {
         "01": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:06:39.579Z",
+          "completedAt": "2026-07-10T04:08:52.789Z",
+          "durationMs": 106404,
+          "reflection": {
+            "taskId": "01",
+            "title": "audit-single-cluster-assumptions",
+            "summary": "Audited every setup script, Make target, manifest, and doc for single-cluster assumptions in the Vault/VSO demo and wrote a categorized audit at `docs/vso-two-cluster-audit.md`, mapping each finding to the specific downstream task (02–12) responsible for fixing it.",
+            "keyLearnings": [
+              "- The single hard blocker for the migration is `create_vault.sh`'s VSO `VaultConnection.spec.address: http://vault.${NAMESPACE}.svc.cluster.local:8200` — this in-cluster DNS name only resolves inside kind-vault-lab and must become the external address (task 05/06/08).",
+              "- Only one Kubernetes auth mount (`auth/kubernetes`) exists today, configured against the Vault cluster's own API server via `$KUBERNETES_SERVICE_HOST/PORT` inside a `kubectl exec` into the Vault pod. The `vso-demo` role is currently bound to this same-cluster mount — it must move to a new `auth/kubernetes-vso` mount configured against the VSO cluster's API server (task 07). The existing `auth/kubernetes` mount and its `vault-demo`/`otel-vault-metrics` roles must NOT be touched — they're intentionally out of scope (Agent Injector + OTel demo paths stay entirely in the Vault cluster).",
+              "- `vso-demo.sh`, `demo.sh`, `presenterm/vso.md`, and `Makefile` targets all issue `kubectl` with zero `--context` flags — every occurrence needs `VAULT_CONTEXT`/`VSO_CONTEXT` split (tasks 03, 09, 10, 12). `demo.sh` (Agent Injector demo) is explicitly out of scope for context-splitting.",
+              "- No `make verify-two-cluster` target exists yet; `verify`/`vso-verify` only ever check one context today (task 11 must add the new target).",
+              "- README's VSO architecture diagram and `PODMAN_MIGRATION.md` both depict/describe a single cluster and need full rewrites, not incremental edits (task 12).",
+              "- `docs/vso-demo-design.md` exists but wasn't audited line-by-line in this task — flagged for task 12 follow-up.",
+              "- No `memory` tool was available in this session's toolset; learnings are captured in the audit doc itself and this reflection for downstream tasks to reference."
+            ],
+            "filesChanged": [
+              "docs/vso-two-cluster-audit.md (created)"
+            ],
+            "timestamp": "2026-07-10T04:08:26.105Z"
+          },
+          "toolUsage": {
+            "read": 6,
+            "write": 1,
+            "edit": 0,
+            "bash": 6,
+            "other": 1
+          },
+          "outputPreview": "## REFLECTION\nSUMMARY: Audited every setup script, Make target, manifest, and doc for single-cluster assumptions in the Vault/VSO demo and wrote a categorized audit at `docs/vso-two-cluster-audit.md`, mapping each finding to the specific downstream task (02–12) responsible for fixing it.\nFILES: docs/vso-two-cluster-audit.md (created)\n\nLEARNINGS:\n- The single hard blocker for the migration is `create_vault.sh`'s VSO `VaultConnection.spec.address: http://vault.${NAMESPACE}.svc.cluster.local:8200` \n... (truncated)",
+          "commitMessages": [
+            "Improve",
+            "Add",
+            "Add",
+            "docs:",
+            "Make",
+            "docs:",
+            "Improve",
+            "Add",
+            "Add",
+            "docs:"
+          ],
+          "commitSummary": "Improve; Add; Add (+2 more); docs:; Improve; Add (+2 more)"
+        },
+        "02": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:08:52.790Z",
+          "completedAt": "2026-07-10T04:17:01.717Z",
+          "durationMs": 443672,
+          "reflection": {
+            "taskId": "02",
+            "title": "add-two-cluster-kind-bootstrap",
+            "summary": "Added `scripts/create-clusters.sh` (deterministic, idempotent Podman-backed kind two-cluster bootstrap) plus versioned kind config templates for `kind-vault-lab`/`kind-vso-lab`, reusing task 03's `scripts/lib/two-cluster-env.sh` for shared context/port variables, and validated the full flow live (clusters created, reused on rerun, ports and cert SANs correct).",
+            "keyLearnings": [
+              "- Task 03 (`scripts/lib/two-cluster-env.sh`) had already landed in this repo (parallel DAG execution — 03 only depends on 01, not 02) before I started. I refactored `create-clusters.sh` to source it rather than introducing a duplicate `scripts/lib/ports.sh`, reusing its `VAULT_CONTEXT`, `VSO_CONTEXT`, `VAULT_KIND_CLUSTER_NAME`, `VSO_KIND_CLUSTER_NAME`, `TWO_CLUSTER_HOST`, `VAULT_HOST_PORT`, `VSO_API_HOST_PORT`, and `require_commands`. Downstream tasks (04+) should keep sourcing `scripts/lib/two-cluster-env.sh` as the single source of truth for these names/ports — I only added `VAULT_NODE_PORT=30820` to it (task 05 will create the actual Vault NodePort Service on this port).",
+              "- Kind config templates live at `scripts/kind/*.yaml.tmpl` using literal `${VAR}` placeholders substituted by `sed` in `create-clusters.sh` (no `envsubst` dependency — not guaranteed present on all machines). Edit the templates + `two-cluster-env.sh` together if the port contract changes.",
+              "- **Critical environment finding**: `kind get clusters` (and anything using kind's podman provider list path, e.g. `preflight_two_cluster_network` in `two-cluster-env.sh`) is broken with podman client 6.0.0 — `podman ps --format '{{index .Labels \"key\"}}'` fails because podman 6's ps format renders `.Labels` as a flat comma string, not a map, so `index` fails with `exit status 125`. I upgraded `kind` 0.29.0 → 0.32.0 via brew, which did NOT fix this (it's a podman-side format change, not a kind-version issue). **`create-clusters.sh` therefore does NOT use `kind get clusters` for idempotency** — instead it attempts `kind create cluster` directly and treats kind's own `\"node(s) already exist\"` stderr message as the reuse signal. Any future script that calls `kind get clusters` on this machine/podman version will also fail; prefer `kubectl config get-contexts <ctx>` or `podman ps --filter label=...` (without `index`) for cluster-existence checks instead.",
+              "- Verified live: `kind-vault-lab` maps container NodePort 30820 → host port 8200; `kind-vso-lab`'s API server listens on host port 6444 with `host.containers.internal` (plus `localhost`/`127.0.0.1`) baked into the serving cert's SAN list (confirmed via `openssl s_client`/`x509`). Both `kind-vault-lab` and `kind-vso-lab` contexts exist in kubeconfig; script never changes the caller's current-context.",
+              "- Both real kind clusters (`vault-lab`, `vso-lab`) are left running in this environment for downstream tasks (04+) to build on."
+            ],
+            "filesChanged": [
+              "scripts/create-clusters.sh (created)",
+              "scripts/kind/vault-lab-config.yaml.tmpl (created)",
+              "scripts/kind/vso-lab-config.yaml.tmpl (created)",
+              "scripts/tests/test-create-clusters-validation.sh (created)",
+              "scripts/lib/two-cluster-env.sh (modified — added `VAULT_NODE_PORT` and included it/cluster names in `print_two_cluster_env`)"
+            ],
+            "blockers": [
+              "none — clusters are up",
+              "idempotent reruns confirmed",
+              "unit validation tests (5/5) pass",
+              "and the port/cert-SAN networking contract is verified against the live containers."
+            ],
+            "timestamp": "2026-07-10T04:16:16.552Z"
+          },
+          "toolUsage": {
+            "read": 0,
+            "write": 8,
+            "edit": 4,
+            "bash": 44,
+            "other": 0
+          },
+          "outputPreview": "## REFLECTION\nSUMMARY: Added `scripts/create-clusters.sh` (deterministic, idempotent Podman-backed kind two-cluster bootstrap) plus versioned kind config templates for `kind-vault-lab`/`kind-vso-lab`, reusing task 03's `scripts/lib/two-cluster-env.sh` for shared context/port variables, and validated the full flow live (clusters created, reused on rerun, ports and cert SANs correct).\n\nFILES: scripts/create-clusters.sh (created), scripts/kind/vault-lab-config.yaml.tmpl (created), scripts/kind/vso-\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "docs:",
+            "Improve",
+            "Add",
+            "Add",
+            "feat:",
+            "feat:",
+            "docs:",
+            "Improve",
+            "Add"
+          ],
+          "commitSummary": "feat:; docs:; Improve (+2 more); feat:; feat:; docs: (+2 more)"
+        },
+        "03": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:08:52.791Z",
+          "completedAt": "2026-07-10T04:10:50.104Z",
+          "durationMs": 88869,
+          "reflection": {
+            "taskId": "03",
+            "title": "add-shared-context-and-preflight-helpers",
+            "summary": "Created `scripts/lib/two-cluster-env.sh`, a shared Bash helper library defining all VAULT_CONTEXT/VSO_CONTEXT-based defaults (contexts, addresses, namespaces, chart versions, resource names) plus reusable preflight functions (`require_commands`, `require_context(s)`, `kubectl_vault`/`kubectl_vso`, `helm_vault`/`helm_vso`, `preflight_two_cluster_network`, `print_two_cluster_env`) for later setup/demo/verify scripts to source.",
+            "keyLearnings": [
+              "- Canonical names/defaults centralized here: `VAULT_CONTEXT=kind-vault-lab`, `VSO_CONTEXT=kind-vso-lab`, `VAULT_KIND_CLUSTER_NAME=vault-lab`, `VSO_KIND_CLUSTER_NAME=vso-lab`, `TWO_CLUSTER_HOST=host.containers.internal`, `VAULT_HOST_PORT=8200` → `VAULT_ADDR=http://host.containers.internal:8200`, `VSO_API_HOST_PORT=6444` → `VSO_API_ADDR=https://host.containers.internal:6444` (matches the plan doc's recommended demo ports).",
+              "- Namespaces reused from `create_vault.sh` verbatim: `NAMESPACE=default`, `OBSERVABILITY_NAMESPACE=observability`, `VSO_NAMESPACE=vso-demo`, `VSO_OPERATOR_NAMESPACE=vault-secrets-operator-system`. `VSO_CHART_VERSION=1.4.0` carried over as the existing pinned version; `VAULT_CHART_VERSION` left blank/overrideable since `create_vault.sh` doesn't currently pin one.",
+              "- New cross-cluster auth naming: `VSO_AUTH_MOUNT=kubernetes-vso`, `VSO_AUTH_ROLE=vso-demo`, `VAULT_TOKEN_REVIEWER_SA=vault-token-reviewer` — these are the names task 07 (auth mount) and task 06/08 (VSO cluster RBAC) should use so everything stays consistent.",
+              "- `context_exists`/`require_context`/`require_contexts` use `kubectl config get-contexts -o name` (never `current-context`) per the acceptance criteria — this is the correctness-independent check other tasks must keep using.",
+              "- Wrapper functions `kubectl_vault`/`kubectl_vso`/`helm_vault`/`helm_vso` are the documented pattern downstream scripts (tasks 04, 06, 07, 09, 10, 11) should call instead of raw `kubectl --context ...`/`helm --kube-context ...`.",
+              "- `preflight_two_cluster_network` is best-effort/non-fatal for things it can't fully verify from the host (e.g., in-pod reachability of `host.containers.internal`) — full reachability proof is deferred to `make verify-two-cluster` (task 11).",
+              "- Tested with a fake `kubectl` shim since this environment has no real kubectl/kind installed; all four required scenarios (both contexts present, missing command, renamed/missing context, same-context-for-both) produce clear, actionable pass/fail output."
+            ],
+            "filesChanged": [
+              "scripts/lib/two-cluster-env.sh (created)"
+            ],
+            "timestamp": "2026-07-10T04:10:21.723Z"
+          },
+          "toolUsage": {
+            "read": 0,
+            "write": 1,
+            "edit": 0,
+            "bash": 9,
+            "other": 0
+          },
+          "outputPreview": "The shared helper file `scripts/lib/two-cluster-env.sh` is complete and validated:\n\n- Syntax check passes (`bash -n`)\n- Sourcing it and calling `print_two_cluster_env` prints all required variables with correct defaults\n- All required functions exist (`require_commands`, `require_context`, `require_contexts`, `kubectl_vault`, `kubectl_vso`, `helm_vault`, `helm_vso`, `preflight_two_cluster_network`, `print_two_cluster_env`)\n- Missing-command test fails with an actionable message naming the comman\n... (truncated)",
+          "commitMessages": [
+            "docs:",
+            "Improve",
+            "Add",
+            "Add",
+            "docs:",
+            "feat:",
+            "docs:",
+            "Improve",
+            "Add",
+            "Add"
+          ],
+          "commitSummary": "docs:; Improve; Add (+2 more); feat:; docs:; Improve (+2 more)"
+        },
+        "04": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:17:01.718Z",
+          "completedAt": "2026-07-10T04:23:38.511Z",
+          "durationMs": 370042,
+          "reflection": {
+            "taskId": "04",
+            "title": "refactor-vault-cluster-setup",
+            "summary": "Created `scripts/setup-vault-cluster.sh`, a context-aware, idempotent extraction of the Vault-only setup logic from `create_vault.sh` (Helm install, init/unseal, kv-v2 seeding, policies, same-cluster Agent Injector + OTel demo), explicitly excluding all VSO/VSO CRD/cross-cluster auth installation; validated live end-to-end against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters.",
+            "keyLearnings": [
+              "- The script sources `scripts/lib/two-cluster-env.sh` and uses only `kubectl_vault`/`helm_vault` wrappers (never raw `kubectl`/`helm`) — every operation targets `VAULT_CONTEXT` explicitly, verified to work correctly with current-context set to an unrelated cluster (`kind-tfe`).",
+              "- Preserved `KEYS_FILE`/`vault-init-keys.json` behavior verbatim, including the sealed-but-initialized recovery path and the fresh-init path; only updated the recovery hint text to reference `scripts/create-clusters.sh` instead of raw `kind create cluster`.",
+              "- Deliberately excludes: VSO Helm install, `vso-demo`/`vault-secrets-operator-system` namespaces, VSO CRDs (`VaultConnection`/`VaultAuth`/`VaultStaticSecret`), `vso-demo-app` pod, and the `vso-demo` auth role/`auth/kubernetes-vso` mount — these are explicitly deferred to later tasks (06/07/08) per `docs/vso-two-cluster-audit.md`. The pre-existing `auth/kubernetes` mount (same-cluster, Agent Injector/OTel) is preserved untouched and must not be confused with the future cross-cluster `auth/kubernetes-vso` mount.",
+              "- Live environment already had a `vault-secrets-operator-system`/`vso-demo` namespace+pod present in `kind-vso-lab` from earlier ad-hoc testing (not caused by this task) — confirmed this script never touches `kind-vso-lab` at all.",
+              "- Encountered a Podman VM root-disk-full issue (`no space left on device` during image pull) unrelated to this script; resolved via `podman system prune -af` freeing ~13.7GB. Future tasks running on this same environment/VM should watch for recurring low disk space (VM disk is only 12GiB).",
+              "- `create_vault.sh` (the original monolithic script) and `Makefile`'s `setup` target were intentionally left unmodified — out of scope for this task; likely task 09's job to rewire `make setup` to call `scripts/setup-vault-cluster.sh` (and a future `scripts/setup-vso-cluster.sh`) instead."
+            ],
+            "filesChanged": [
+              "scripts/setup-vault-cluster.sh (created)"
+            ],
+            "blockers": [
+              "none — script is complete",
+              "idempotent",
+              "and validated live against both real clusters."
+            ],
+            "timestamp": "2026-07-10T04:23:11.833Z"
+          },
+          "toolUsage": {
+            "read": 4,
+            "write": 1,
+            "edit": 0,
+            "bash": 21,
+            "other": 2
+          },
+          "outputPreview": "## Summary\n\nCreated `scripts/setup-vault-cluster.sh`, extracting the Vault-only portion of `create_vault.sh` into a context-aware, idempotent script that sources `scripts/lib/two-cluster-env.sh` (from task 03) and routes every `kubectl`/`helm` call through the `kubectl_vault`/`helm_vault` wrappers (`--context`/`--kube-context \"$VAULT_CONTEXT\"`).\n\n**What it does:** installs Vault via Helm, waits for `vault-0`, initializes/unseals (idempotent, recovers from `vault-init-keys.json`), enables the fil\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "feat:",
+            "feat:",
+            "docs:",
+            "Improve",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "docs:"
+          ],
+          "commitSummary": "feat:; feat:; feat: (+2 more); feat:; feat:; feat: (+2 more)"
+        },
+        "06": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:17:01.719Z",
+          "completedAt": "2026-07-10T04:21:29.295Z",
+          "durationMs": 213598,
+          "reflection": {
+            "taskId": "06",
+            "title": "refactor-vso-cluster-setup",
+            "summary": "Created `scripts/setup-vso-cluster.sh`, a context-aware script that installs the Vault Secrets Operator, creates the `vso-demo` namespace with `vso-demo`/`vault-token-reviewer` service accounts, and grants TokenReview RBAC (`system:auth-delegator`) — all scoped exclusively to `VSO_CONTEXT` (`kind-vso-lab`) via the shared `kubectl_vso`/`helm_vso` wrappers, with no Vault auth config or VSO CRDs applied. Verified live end-to-end against real Podman-backed kind clusters.",
+            "keyLearnings": [
+              "- Followed the `--check-only` pattern established by `scripts/create-clusters.sh` (task 02): validates `require_commands kubectl helm` and `require_context \"$VSO_CONTEXT\"` before doing any real work, and exits early with `--check-only` for safe testing.",
+              "- Only requires `VSO_CONTEXT` to exist (not `require_contexts`, which checks both) — this script's job is VSO-cluster-only setup, so it should not fail if the Vault cluster isn't up yet.",
+              "- RBAC choice: bound `vault-token-reviewer` SA to the built-in `system:auth-delegator` ClusterRole (same pattern `create_vault.sh` used for the Vault SA itself) — this grants both TokenReview and SubjectAccessReview, the standard binding for Kubernetes-auth reviewer identities. Binding name: `vault-token-reviewer-auth-delegator`.",
+              "- Reused all naming/constants from `scripts/lib/two-cluster-env.sh` (task 03): `VSO_OPERATOR_NAMESPACE=vault-secrets-operator-system`, `VSO_NAMESPACE=vso-demo`, `VSO_CHART_VERSION=1.4.0`, `VAULT_TOKEN_REVIEWER_SA=vault-token-reviewer`. No new env vars introduced.",
+              "- Deliberately does NOT configure `auth/kubernetes-vso` in Vault or apply `VaultConnection`/`VaultAuth`/`VaultStaticSecret` CRDs — that's explicitly deferred to later tasks (07/08) per the task notes, keeping this script pure cluster/RBAC scaffolding.",
+              "- Verified live: script is idempotent (rerun shows `unchanged`/upgrade to revision 2 without errors), never reads or mutates the caller's current kubectl context (tested by running with `current-context=kind-vault-lab` and confirming it stays unchanged and VSO still installs correctly in `kind-vso-lab`), and `kind-vault-lab` has no `vault-secrets-operator-system` or `vso-demo` namespace after the run.",
+              "- A sibling script `scripts/setup-vault-cluster.sh` (untracked, presumably from a parallel task 04/05 run) already exists with matching conventions/comments referencing this script by name — no naming conflicts.",
+              "- Test script includes a regression guard: greps the script for any bare `kubectl`/`helm` invocation not going through `kubectl_vso`/`helm_vso` (watch for macOS/BSD grep needing `[[:space:]]` instead of `\\s`, and anchoring `^[0-9]+:` after `grep -n` line-number prefixes when filtering comment lines)."
+            ],
+            "filesChanged": [
+              "scripts/setup-vso-cluster.sh (created)",
+              "scripts/tests/test-setup-vso-cluster-validation.sh (created)"
+            ],
+            "timestamp": "2026-07-10T04:20:35.380Z"
+          },
+          "toolUsage": {
+            "read": 1,
+            "write": 2,
+            "edit": 3,
+            "bash": 23,
+            "other": 0
+          },
+          "outputPreview": "## REFLECTION\nSUMMARY: Created `scripts/setup-vso-cluster.sh`, a context-aware script that installs the Vault Secrets Operator, creates the `vso-demo` namespace with `vso-demo`/`vault-token-reviewer` service accounts, and grants TokenReview RBAC (`system:auth-delegator`) — all scoped exclusively to `VSO_CONTEXT` (`kind-vso-lab`) via the shared `kubectl_vso`/`helm_vso` wrappers, with no Vault auth config or VSO CRDs applied. Verified live end-to-end against real Podman-backed kind clusters.\n\nFILE\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "feat:",
+            "docs:",
+            "Improve",
+            "Add",
+            "feat:",
+            "feat:",
+            "feat:",
+            "docs:",
+            "Improve"
+          ],
+          "commitSummary": "feat:; feat:; docs: (+2 more); feat:; feat:; feat: (+2 more)"
+        },
+        "05": {
           "status": "in_progress",
           "retries": 0,
-          "startedAt": "2026-07-10T04:06:39.579Z"
+          "startedAt": "2026-07-10T04:23:38.512Z"
+        },
+        "07": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:23:38.513Z",
+          "completedAt": "2026-07-10T04:27:08.618Z",
+          "durationMs": 171326,
+          "reflection": {
+            "taskId": "07",
+            "title": "configure-vso-kubernetes-auth",
+            "summary": "Created `scripts/configure-vso-kubernetes-auth.sh`, an idempotent, context-explicit script that enables and configures a dedicated `auth/kubernetes-vso` Vault Kubernetes auth mount validated against the VSO cluster's API server, writes the least-privilege `vso-demo` role, and was validated live end-to-end (auth enable, config, role write, and a real cross-cluster JWT login returning the `mysecret` policy).",
+            "keyLearnings": [
+              "- Reviewer JWT is minted via `kubectl create token vault-token-reviewer -n vso-demo --duration 8760h` (using `kubectl_vso`), not a static Secret-bound SA token — simpler on modern Kubernetes and documented as a demo-only limitation (not auto-refreshed; re-running the script mints a fresh one and rewrites `auth/kubernetes-vso/config`, which is otherwise a safe, idempotent operation).",
+              "- The VSO cluster's API server CA is read directly from the local kubeconfig (`kubectl config view --raw` for `VSO_CONTEXT`'s cluster entry, base64-decoded), not from inside a VSO-cluster pod — this works because kind's kubeconfig embeds the same CA that signs the API server cert whose SANs include `TWO_CLUSTER_HOST` (set up in task 02/03). This is the one intentional bare `kubectl` call in the script (context-agnostic by design), everything else goes through `kubectl_vault`/`kubectl_vso`.",
+              "- `vault write auth/<mount>/config kubernetes_ca_cert=\"$MULTILINE_PEM\"` works fine passed straight through `kubectl exec ... -- vault write ...` (no `sh -c`) since kubectl exec forwards argv elements as-is without shell re-parsing, so embedded newlines in a quoted bash variable survive intact.",
+              "- `auth/kubernetes-vso/role/vso-demo` is bound only to SA `vso-demo` in namespace `vso-demo` (VSO_NAMESPACE) with `policies=mysecret` only (no `default` policy on the role — Vault still adds Vault's own `default` policy automatically at login, which is expected and fine, verified in `token_policies=[\"default\",\"mysecret\"]` from an actual login response).",
+              "- Live-verified against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters (already set up by tasks 04/06): `vault auth list` shows `kubernetes-vso/` alongside the untouched same-cluster `kubernetes/` mount; a fresh SA token minted from `kind-vso-lab`'s `vso-demo` SA logs in successfully via `auth/kubernetes-vso/login` and receives the `mysecret` policy; re-running the script is fully idempotent (mount stays enabled, config/role rewritten cleanly, login still works afterward).",
+              "- Follows the same script conventions as tasks 02/04/06: sources `scripts/lib/two-cluster-env.sh`, supports `--check-only`/`-h`/`--help`, uses `require_commands`/`require_contexts`, and ships a matching `scripts/tests/*-validation.sh` unit test (10/10 passing) that also greps for accidental bare `kubectl` calls and any reference to the same-cluster `auth/kubernetes/` mount."
+            ],
+            "filesChanged": [
+              "scripts/configure-vso-kubernetes-auth.sh (created)",
+              "scripts/tests/test-configure-vso-kubernetes-auth-validation.sh (created)"
+            ],
+            "blockers": [
+              "none — script is complete",
+              "idempotent",
+              "and validated live end-to-end including a real cross-cluster Vault login."
+            ],
+            "timestamp": "2026-07-10T04:26:29.932Z"
+          },
+          "toolUsage": {
+            "read": 0,
+            "write": 2,
+            "edit": 0,
+            "bash": 24,
+            "other": 0
+          },
+          "outputPreview": "New files created cleanly alongside prior tasks' output (task 05's `check-vault-connectivity.sh` was already present from earlier work). My changes are isolated to the two new files for this task.\n\n## REFLECTION\nSUMMARY: Created `scripts/configure-vso-kubernetes-auth.sh`, an idempotent, context-explicit script that enables and configures a dedicated `auth/kubernetes-vso` Vault Kubernetes auth mount validated against the VSO cluster's API server, writes the least-privilege `vso-demo` role, and wa\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "docs:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:"
+          ],
+          "commitSummary": "feat:; feat:; feat: (+2 more); feat:; feat:; feat: (+2 more)"
         }
       },
       "startedAt": "2026-07-10T04:06:04.856Z",
-      "lastUpdatedAt": "2026-07-10T04:06:39.579Z",
+      "lastUpdatedAt": "2026-07-10T04:27:08.618Z",
       "paused": false
     }
   }

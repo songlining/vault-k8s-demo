@@ -7,12 +7,12 @@ Status legend: [ ] todo, [~] in-progress, [x] done
 Tasks
 
 - [x] 01 — audit-single-cluster-assumptions → `01-audit-single-cluster-assumptions.md`
-- [~] 02 — add-two-cluster-kind-bootstrap → `02-add-two-cluster-kind-bootstrap.md`
+- [x] 02 — add-two-cluster-kind-bootstrap → `02-add-two-cluster-kind-bootstrap.md`
 - [x] 03 — add-shared-context-and-preflight-helpers → `03-add-shared-context-and-preflight-helpers.md`
-- [ ] 04 — refactor-vault-cluster-setup → `04-refactor-vault-cluster-setup.md`
-- [ ] 05 — expose-vault-cross-cluster → `05-expose-vault-cross-cluster.md`
-- [~] 06 — refactor-vso-cluster-setup → `06-refactor-vso-cluster-setup.md`
-- [ ] 07 — configure-vso-kubernetes-auth → `07-configure-vso-kubernetes-auth.md`
+- [x] 04 — refactor-vault-cluster-setup → `04-refactor-vault-cluster-setup.md`
+- [~] 05 — expose-vault-cross-cluster → `05-expose-vault-cross-cluster.md`
+- [x] 06 — refactor-vso-cluster-setup → `06-refactor-vso-cluster-setup.md`
+- [x] 07 — configure-vso-kubernetes-auth → `07-configure-vso-kubernetes-auth.md`
 - [ ] 08 — apply-vso-crds-and-consuming-app → `08-apply-vso-crds-and-consuming-app.md`
 - [ ] 09 — update-make-targets → `09-update-make-targets.md`
 - [ ] 10 — update-demo-scripts → `10-update-demo-scripts.md`

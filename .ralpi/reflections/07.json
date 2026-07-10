@@ -1,0 +1,23 @@
+{
+  "taskId": "07",
+  "title": "configure-vso-kubernetes-auth",
+  "summary": "Created `scripts/configure-vso-kubernetes-auth.sh`, an idempotent, context-explicit script that enables and configures a dedicated `auth/kubernetes-vso` Vault Kubernetes auth mount validated against the VSO cluster's API server, writes the least-privilege `vso-demo` role, and was validated live end-to-end (auth enable, config, role write, and a real cross-cluster JWT login returning the `mysecret` policy).",
+  "keyLearnings": [
+    "- Reviewer JWT is minted via `kubectl create token vault-token-reviewer -n vso-demo --duration 8760h` (using `kubectl_vso`), not a static Secret-bound SA token — simpler on modern Kubernetes and documented as a demo-only limitation (not auto-refreshed; re-running the script mints a fresh one and rewrites `auth/kubernetes-vso/config`, which is otherwise a safe, idempotent operation).",
+    "- The VSO cluster's API server CA is read directly from the local kubeconfig (`kubectl config view --raw` for `VSO_CONTEXT`'s cluster entry, base64-decoded), not from inside a VSO-cluster pod — this works because kind's kubeconfig embeds the same CA that signs the API server cert whose SANs include `TWO_CLUSTER_HOST` (set up in task 02/03). This is the one intentional bare `kubectl` call in the script (context-agnostic by design), everything else goes through `kubectl_vault`/`kubectl_vso`.",
+    "- `vault write auth/<mount>/config kubernetes_ca_cert=\"$MULTILINE_PEM\"` works fine passed straight through `kubectl exec ... -- vault write ...` (no `sh -c`) since kubectl exec forwards argv elements as-is without shell re-parsing, so embedded newlines in a quoted bash variable survive intact.",
+    "- `auth/kubernetes-vso/role/vso-demo` is bound only to SA `vso-demo` in namespace `vso-demo` (VSO_NAMESPACE) with `policies=mysecret` only (no `default` policy on the role — Vault still adds Vault's own `default` policy automatically at login, which is expected and fine, verified in `token_policies=[\"default\",\"mysecret\"]` from an actual login response).",
+    "- Live-verified against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters (already set up by tasks 04/06): `vault auth list` shows `kubernetes-vso/` alongside the untouched same-cluster `kubernetes/` mount; a fresh SA token minted from `kind-vso-lab`'s `vso-demo` SA logs in successfully via `auth/kubernetes-vso/login` and receives the `mysecret` policy; re-running the script is fully idempotent (mount stays enabled, config/role rewritten cleanly, login still works afterward).",
+    "- Follows the same script conventions as tasks 02/04/06: sources `scripts/lib/two-cluster-env.sh`, supports `--check-only`/`-h`/`--help`, uses `require_commands`/`require_contexts`, and ships a matching `scripts/tests/*-validation.sh` unit test (10/10 passing) that also greps for accidental bare `kubectl` calls and any reference to the same-cluster `auth/kubernetes/` mount."
+  ],
+  "filesChanged": [
+    "scripts/configure-vso-kubernetes-auth.sh (created)",
+    "scripts/tests/test-configure-vso-kubernetes-auth-validation.sh (created)"
+  ],
+  "blockers": [
+    "none — script is complete",
+    "idempotent",
+    "and validated live end-to-end including a real cross-cluster Vault login."
+  ],
+  "timestamp": "2026-07-10T04:26:29.932Z"
+}

@@ -1,0 +1,22 @@
+{
+  "taskId": "04",
+  "title": "refactor-vault-cluster-setup",
+  "summary": "Created `scripts/setup-vault-cluster.sh`, a context-aware, idempotent extraction of the Vault-only setup logic from `create_vault.sh` (Helm install, init/unseal, kv-v2 seeding, policies, same-cluster Agent Injector + OTel demo), explicitly excluding all VSO/VSO CRD/cross-cluster auth installation; validated live end-to-end against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters.",
+  "keyLearnings": [
+    "- The script sources `scripts/lib/two-cluster-env.sh` and uses only `kubectl_vault`/`helm_vault` wrappers (never raw `kubectl`/`helm`) — every operation targets `VAULT_CONTEXT` explicitly, verified to work correctly with current-context set to an unrelated cluster (`kind-tfe`).",
+    "- Preserved `KEYS_FILE`/`vault-init-keys.json` behavior verbatim, including the sealed-but-initialized recovery path and the fresh-init path; only updated the recovery hint text to reference `scripts/create-clusters.sh` instead of raw `kind create cluster`.",
+    "- Deliberately excludes: VSO Helm install, `vso-demo`/`vault-secrets-operator-system` namespaces, VSO CRDs (`VaultConnection`/`VaultAuth`/`VaultStaticSecret`), `vso-demo-app` pod, and the `vso-demo` auth role/`auth/kubernetes-vso` mount — these are explicitly deferred to later tasks (06/07/08) per `docs/vso-two-cluster-audit.md`. The pre-existing `auth/kubernetes` mount (same-cluster, Agent Injector/OTel) is preserved untouched and must not be confused with the future cross-cluster `auth/kubernetes-vso` mount.",
+    "- Live environment already had a `vault-secrets-operator-system`/`vso-demo` namespace+pod present in `kind-vso-lab` from earlier ad-hoc testing (not caused by this task) — confirmed this script never touches `kind-vso-lab` at all.",
+    "- Encountered a Podman VM root-disk-full issue (`no space left on device` during image pull) unrelated to this script; resolved via `podman system prune -af` freeing ~13.7GB. Future tasks running on this same environment/VM should watch for recurring low disk space (VM disk is only 12GiB).",
+    "- `create_vault.sh` (the original monolithic script) and `Makefile`'s `setup` target were intentionally left unmodified — out of scope for this task; likely task 09's job to rewire `make setup` to call `scripts/setup-vault-cluster.sh` (and a future `scripts/setup-vso-cluster.sh`) instead."
+  ],
+  "filesChanged": [
+    "scripts/setup-vault-cluster.sh (created)"
+  ],
+  "blockers": [
+    "none — script is complete",
+    "idempotent",
+    "and validated live against both real clusters."
+  ],
+  "timestamp": "2026-07-10T04:23:11.833Z"
+}

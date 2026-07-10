@@ -75,6 +75,45 @@ EOF
 
 VAULT_SERVICE_ACCOUNT="${VAULT_SERVICE_ACCOUNT:-vault}"
 
+# --- Cross-cluster exposure ------------------------------------------------
+#
+# Pods in the VSO cluster cannot resolve `vault.default.svc.cluster.local`
+# (that DNS name only exists inside the Vault cluster's own cluster
+# network). Instead, expose Vault's existing ClusterIP-backed pod selector
+# via a NodePort Service. The Vault cluster's kind config
+# (scripts/kind/vault-lab-config.yaml.tmpl) maps that NodePort 1:1 to a host
+# port via extraPortMappings, so consumers outside this cluster (including
+# pods in kind-vso-lab, via Podman's host gateway) can reach Vault at
+# VAULT_ADDR (http://${TWO_CLUSTER_HOST}:${VAULT_HOST_PORT} by default -- see
+# scripts/lib/two-cluster-env.sh). This Service is additive: it does not
+# replace or modify the Helm chart's own `vault`/`vault-internal` Services,
+# so `vault.default.svc.cluster.local` continues to work unchanged for
+# same-cluster consumers (Agent Injector, OTel collector).
+echo "==> Exposing Vault via NodePort '${VAULT_NODE_PORT}' (host port ${VAULT_HOST_PORT}) for cross-cluster access..."
+kubectl_vault apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-external
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/instance: vault
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/component: cross-cluster-access
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/instance: vault
+    app.kubernetes.io/name: vault
+    component: server
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+      nodePort: ${VAULT_NODE_PORT}
+      protocol: TCP
+EOF
+
 echo "Waiting for Vault pod to be ready in ${VAULT_CONTEXT}..."
 while : ; do
   POD=$(kubectl_vault get pods -n "$NAMESPACE" -l "$VAULT_POD_LABEL_SELECTOR" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
@@ -429,6 +468,11 @@ echo ""
 echo "Vault cluster '${VAULT_CONTEXT}' is set up: kv-v2/vault-demo/mysecret is seeded,"
 echo "the Agent Injector demo pod and OTel collector are running, and the"
 echo "same-cluster auth/kubernetes mount is configured."
+echo ""
+echo "Vault is reachable cross-cluster at VAULT_ADDR=${VAULT_ADDR} via the"
+echo "'vault-external' NodePort Service (nodePort ${VAULT_NODE_PORT}) mapped to"
+echo "host port ${VAULT_HOST_PORT} by the kind cluster's extraPortMappings."
+echo "Verify with: scripts/check-vault-connectivity.sh"
 echo ""
 echo "This script does not install VSO, VSO CRDs, or the cross-cluster"
 echo "auth/kubernetes-vso mount -- see scripts/setup-vso-cluster.sh and the"
