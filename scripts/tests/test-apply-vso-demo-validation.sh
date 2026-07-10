@@ -150,16 +150,41 @@ assert_not_contains \
   "$MANIFEST_CONTENTS" 'address: http://vault.default.svc.cluster.local'
 
 assert_contains \
-  "VaultAuth uses the dedicated cross-cluster auth mount variable" \
-  "$CONTENTS" 'mount: ${VSO_AUTH_MOUNT}'
+  "VaultAuth uses method: jwt" \
+  "$CONTENTS" 'method: jwt'
 
 assert_contains \
-  "VaultAuth role uses the VSO_AUTH_ROLE variable" \
-  "$CONTENTS" 'role: ${VSO_AUTH_ROLE}'
+  "VaultAuth uses the dedicated cross-cluster JWT auth mount variable" \
+  "$CONTENTS" 'mount: ${VSO_JWT_AUTH_MOUNT}'
 
 assert_contains \
-  "VaultAuth binds the vso-demo service account" \
+  "VaultAuth jwt.role uses the VSO_JWT_AUTH_ROLE variable" \
+  "$CONTENTS" 'role: ${VSO_JWT_AUTH_ROLE}'
+
+assert_contains \
+  "VaultAuth jwt.serviceAccount binds the vso-demo service account" \
   "$CONTENTS" 'serviceAccount: vso-demo'
+
+assert_contains \
+  "VaultAuth jwt.audiences block is present" \
+  "$CONTENTS" 'audiences:'
+
+assert_contains \
+  "VaultAuth jwt.audiences uses the VSO_JWT_AUDIENCE variable" \
+  "$CONTENTS" '${VSO_JWT_AUDIENCE}'
+
+assert_contains \
+  "VaultAuth jwt.tokenExpirationSeconds is set to a short bounded value" \
+  "$CONTENTS" 'tokenExpirationSeconds: 600'
+
+VAULTAUTH_MANIFEST="$(awk '/^kind: VaultAuth$/,/^---$/' "$APPLY_VSO")"
+assert_not_contains \
+  "VaultAuth manifest no longer contains the old kubernetes: auth stanza" \
+  "$VAULTAUTH_MANIFEST" 'kubernetes:'
+
+assert_not_contains \
+  "VaultAuth manifest does not use method: kubernetes" \
+  "$VAULTAUTH_MANIFEST" 'method: kubernetes'
 
 assert_contains \
   "VaultStaticSecret reads from kv-v2/vault-demo/mysecret" \

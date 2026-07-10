@@ -11,9 +11,10 @@
 #     (VAULT_ADDR, see scripts/lib/two-cluster-env.sh)
 #   - scripts/setup-vso-cluster.sh:               VSO operator installed +
 #     vso-demo namespace/service account in the VSO cluster
-#   - scripts/configure-vso-kubernetes-auth.sh:   auth/kubernetes-vso
-#     (dedicated, cross-cluster Kubernetes auth mount) configured in the
-#     Vault cluster against the VSO cluster's API server
+#   - scripts/configure-vso-jwt-auth.sh:           auth/jwt-vso (dedicated,
+#     cross-cluster JWT/OIDC auth mount, validated via the VSO cluster's
+#     JWKS signing keys -- no TokenReview, no reviewer JWT) configured in
+#     the Vault cluster
 #
 # What this script does, all in VSO_CONTEXT only:
 #   - Re-seeds kv-v2/vault-demo/mysecret to the baseline value in the Vault
@@ -22,8 +23,11 @@
 #     host.containers.internal address -- never the same-cluster
 #     vault.default.svc.cluster.local DNS name, which VSO cluster pods
 #     cannot resolve).
-#   - Applies VaultAuth (mount: kubernetes-vso, role: vso-demo, service
-#     account: vso-demo).
+#   - Applies VaultAuth (method: jwt, mount: jwt-vso, role: vso-demo,
+#     service account: vso-demo, audiences: vault, short-lived projected
+#     token). This is a projected ServiceAccount token JWT login -- no
+#     TokenReview call back to the VSO cluster's API server, and no
+#     token_reviewer_jwt stored anywhere.
 #   - Applies VaultStaticSecret (kv-v2/vault-demo/mysecret -> native Secret
 #     vso-demo-mysecret, refreshAfter 30s).
 #   - Recreates the plain vso-demo-app pod (envFrom the native Secret; no
@@ -33,18 +37,18 @@
 #
 # This script deliberately does NOT touch the Vault cluster's CRDs (there
 # are none -- VSO and its CRDs only exist in the VSO cluster) and does NOT
-# install VSO itself or configure Vault Kubernetes auth; see
-# scripts/setup-vso-cluster.sh and scripts/configure-vso-kubernetes-auth.sh
-# for those.
+# install VSO itself or configure Vault JWT/OIDC auth; see
+# scripts/setup-vso-cluster.sh and scripts/configure-vso-jwt-auth.sh for
+# those.
 #
 # Usage:
 #   scripts/apply-vso-demo.sh
 #   scripts/apply-vso-demo.sh --check-only   # validate tools/context only
 #
 # Env overrides live in scripts/lib/two-cluster-env.sh (VAULT_CONTEXT,
-# VSO_CONTEXT, VAULT_ADDR, VSO_NAMESPACE, VSO_AUTH_MOUNT, VSO_AUTH_ROLE,
-# SECRET_NAME, APP_POD, NAMESPACE), plus BASELINE_USERNAME (default: larry)
-# and SYNC_ATTEMPTS (default: 30).
+# VSO_CONTEXT, VAULT_ADDR, VSO_NAMESPACE, VSO_JWT_AUTH_MOUNT,
+# VSO_JWT_AUTH_ROLE, VSO_JWT_AUDIENCE, SECRET_NAME, APP_POD, NAMESPACE),
+# plus BASELINE_USERNAME (default: larry) and SYNC_ATTEMPTS (default: 30).
 
 set -euo pipefail
 
@@ -90,7 +94,7 @@ echo "==> Applying the VSO demo (CRDs + consuming app) in context '${VSO_CONTEXT
 echo "    Vault cluster (secret source): ${VAULT_CONTEXT}"
 echo "    VSO cluster (CRDs + app):      ${VSO_CONTEXT}"
 echo "    Vault external address:        ${VAULT_ADDR}"
-echo "    Auth mount:                    ${VSO_AUTH_MOUNT}"
+echo "    Auth mount:                    ${VSO_JWT_AUTH_MOUNT}"
 echo ""
 
 # --- Seed the Vault secret to its baseline value ----------------------------
@@ -125,9 +129,14 @@ fi
 # cluster cannot resolve vault.default.svc.cluster.local, which only exists
 # inside the Vault cluster's own cluster network.
 #
-# VaultAuth.spec.mount is the dedicated cross-cluster auth/kubernetes-vso
-# mount configured by scripts/configure-vso-kubernetes-auth.sh, never the
-# same-cluster auth/kubernetes mount used by the Agent Injector/OTel paths.
+# VaultAuth.spec.mount is the dedicated cross-cluster auth/jwt-vso mount
+# configured by scripts/configure-vso-jwt-auth.sh, never the same-cluster
+# auth/kubernetes mount used by the Agent Injector/OTel paths. method: jwt
+# uses VSO's built-in projected ServiceAccount token support
+# (jwt.serviceAccount) -- VSO requests a short-lived, audience-scoped
+# token directly from the VSO cluster's API server and presents it to
+# Vault's JWT auth mount, which validates it against the VSO cluster's
+# JWKS keys. No token_reviewer_jwt is stored anywhere in this path.
 
 echo "==> Applying VaultConnection/VaultAuth/VaultStaticSecret in '${VSO_CONTEXT}'..."
 kubectl_vso apply -f - <<EOF
@@ -147,11 +156,14 @@ metadata:
   namespace: ${VSO_NAMESPACE}
 spec:
   vaultConnectionRef: vso-demo-connection
-  method: kubernetes
-  mount: ${VSO_AUTH_MOUNT}
-  kubernetes:
-    role: ${VSO_AUTH_ROLE}
+  method: jwt
+  mount: ${VSO_JWT_AUTH_MOUNT}
+  jwt:
+    role: ${VSO_JWT_AUTH_ROLE}
     serviceAccount: vso-demo
+    audiences:
+      - ${VSO_JWT_AUDIENCE}
+    tokenExpirationSeconds: 600
 ---
 apiVersion: secrets.hashicorp.com/v1beta1
 kind: VaultStaticSecret
@@ -228,7 +240,7 @@ kubectl_vso wait -n "$VSO_NAMESPACE" --for=condition=Ready "pod/${APP_POD}" --ti
 echo ""
 echo "VSO demo applied in context '${VSO_CONTEXT}':"
 echo "  - VaultConnection 'vso-demo-connection' -> ${VAULT_ADDR}"
-echo "  - VaultAuth 'vso-demo-auth' (mount: ${VSO_AUTH_MOUNT}, role: ${VSO_AUTH_ROLE})"
+echo "  - VaultAuth 'vso-demo-auth' (method: jwt, mount: ${VSO_JWT_AUTH_MOUNT}, role: ${VSO_JWT_AUTH_ROLE})"
 echo "  - VaultStaticSecret '${SECRET_NAME}' <- kv-v2/vault-demo/mysecret (refreshAfter 30s)"
 echo "  - Native Secret '${SECRET_NAME}' synced with username=${BASELINE_USERNAME}"
 echo "  - Consuming pod '${APP_POD}' (1/1, no vault.hashicorp.com annotations)"
