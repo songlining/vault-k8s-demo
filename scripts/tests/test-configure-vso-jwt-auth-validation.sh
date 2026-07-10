@@ -22,6 +22,8 @@
 #       * every live-cluster kubectl invocation uses an explicit-context
 #         wrapper (kubectl_vault/kubectl_vso), except the one intentional
 #         context-agnostic `kubectl config view` CA read
+#       * idempotent intent: the auth-enable step is guarded by a prior
+#         `vault auth list` check before `vault auth enable`
 #
 # These tests never configure a real Vault -- they only exercise the
 # fast-failing validation path via `--check-only` and static review of the
@@ -266,6 +268,22 @@ if [ -n "$bare_calls" ]; then
 else
   echo "PASS: every live-cluster kubectl invocation uses an explicit-context wrapper"
   pass=$((pass + 1))
+fi
+
+# 19. Idempotent intent: the auth mount enable step must be guarded by a
+#     check for an already-enabled mount (via `vault auth list`) before
+#     calling `vault auth enable`, so a second run does not fail with
+#     "path is already in use". The config/role writes below it are
+#     naturally idempotent upserts (vault write always overwrites) and need
+#     no such guard.
+enable_guard_line=$(grep -n 'vault auth list.*grep -q "\^\${VSO_JWT_AUTH_MOUNT}/"' "$CONFIGURE_JWT_AUTH" | head -1 | cut -d: -f1)
+enable_line=$(grep -n 'vault auth enable -path="\${VSO_JWT_AUTH_MOUNT}"' "$CONFIGURE_JWT_AUTH" | head -1 | cut -d: -f1)
+if [ -n "$enable_guard_line" ] && [ -n "$enable_line" ] && [ "$enable_guard_line" -lt "$enable_line" ]; then
+  echo "PASS: auth enable is guarded by a prior 'vault auth list' idempotency check"
+  pass=$((pass + 1))
+else
+  echo "FAIL: could not confirm 'vault auth enable' is guarded by a preceding 'vault auth list' check (idempotent re-run would fail on 'path is already in use')"
+  fail=$((fail + 1))
 fi
 
 echo ""

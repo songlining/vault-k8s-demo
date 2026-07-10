@@ -9,13 +9,13 @@ Tasks
 - [x] 01 — spike-oidc-discovery-and-jwks → `01-spike-oidc-discovery-and-jwks.md`
 - [x] 02 — configure-kind-oidc-issuer → `02-configure-kind-oidc-issuer.md`
 - [x] 03 — add-jwt-oidc-env-defaults → `03-add-jwt-oidc-env-defaults.md`
-- [~] 04 — implement-vso-jwt-auth-setup → `04-implement-vso-jwt-auth-setup.md`
-- [ ] 05 — refactor-vso-cluster-setup → `05-refactor-vso-cluster-setup.md`
-- [ ] 06 — switch-vso-vaultauth-to-jwt → `06-switch-vso-vaultauth-to-jwt.md`
-- [ ] 07 — update-make-targets-and-setup-flow → `07-update-make-targets-and-setup-flow.md`
-- [ ] 08 — update-two-cluster-verification → `08-update-two-cluster-verification.md`
-- [ ] 09 — update-validation-tests → `09-update-validation-tests.md`
-- [ ] 10 — update-demo-scripts-docs-and-deck → `10-update-demo-scripts-docs-and-deck.md`
+- [x] 04 — implement-vso-jwt-auth-setup → `04-implement-vso-jwt-auth-setup.md`
+- [x] 05 — refactor-vso-cluster-setup → `05-refactor-vso-cluster-setup.md`
+- [x] 06 — switch-vso-vaultauth-to-jwt → `06-switch-vso-vaultauth-to-jwt.md`
+- [x] 07 — update-make-targets-and-setup-flow → `07-update-make-targets-and-setup-flow.md`
+- [x] 08 — update-two-cluster-verification → `08-update-two-cluster-verification.md`
+- [x] 09 — update-validation-tests → `09-update-validation-tests.md`
+- [~] 10 — update-demo-scripts-docs-and-deck → `10-update-demo-scripts-docs-and-deck.md`
 - [ ] 11 — run-end-to-end-validation → `11-run-end-to-end-validation.md`
 
 Dependencies
