@@ -11,7 +11,7 @@ Tasks
 - [x] 03 — add-shared-context-and-preflight-helpers → `03-add-shared-context-and-preflight-helpers.md`
 - [ ] 04 — refactor-vault-cluster-setup → `04-refactor-vault-cluster-setup.md`
 - [ ] 05 — expose-vault-cross-cluster → `05-expose-vault-cross-cluster.md`
-- [ ] 06 — refactor-vso-cluster-setup → `06-refactor-vso-cluster-setup.md`
+- [~] 06 — refactor-vso-cluster-setup → `06-refactor-vso-cluster-setup.md`
 - [ ] 07 — configure-vso-kubernetes-auth → `07-configure-vso-kubernetes-auth.md`
 - [ ] 08 — apply-vso-crds-and-consuming-app → `08-apply-vso-crds-and-consuming-app.md`
 - [ ] 09 — update-make-targets → `09-update-make-targets.md`
