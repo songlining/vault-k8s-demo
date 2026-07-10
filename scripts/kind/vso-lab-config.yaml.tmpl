@@ -9,6 +9,23 @@
 # Kubernetes auth TokenReview at https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}.
 # The certSANs patch adds ${TWO_CLUSTER_HOST} to the API server's serving
 # certificate so that address validates over TLS.
+#
+# Service account issuer / JWKS (Vault JWT/OIDC auth): this template
+# deliberately does NOT set apiServer.extraArgs.service-account-issuer or
+# service-account-jwks-uri. kubeadm's default issuer
+# (https://kubernetes.default.svc.cluster.local) is cluster-internal and
+# unreachable from the Vault cluster, but Vault's auth/jwt-vso mount does
+# not need to reach it: Vault is configured with jwks_url pointed at this
+# API server's externally-mapped address
+# (https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}/openid/v1/jwks, already
+# covered by the certSANs patch below) and bound_issuer set to the actual
+# (unreachable) iss string, which is only ever string-compared, never
+# fetched. See docs/vso-jwt-oidc-auth-spike-01.md and
+# docs/vso-jwt-oidc-auth-task-02.md for the full investigation and
+# decision record. If a future demo needs oidc_discovery_url instead of
+# jwks_url, revisit this decision - that mode does require the issuer
+# itself to be reachable and self-consistent, which would need
+# service-account-issuer/service-account-jwks-uri overrides here.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ${VSO_KIND_CLUSTER_NAME}

@@ -200,6 +200,14 @@ Acceptance criteria:
 
 ### Phase 2 — Update kind/VSO cluster configuration if needed
 
+> **Status: complete, no template change required.** See
+> [`docs/vso-jwt-oidc-auth-task-02.md`](./vso-jwt-oidc-auth-task-02.md) for
+> the re-validated evidence (fresh token `iss`, JWKS/discovery reachability
+> from the Vault cluster, RBAC grant still present) confirming the Phase 1
+> decision holds. Only explanatory comments were added to
+> `scripts/create-clusters.sh` and `scripts/kind/vso-lab-config.yaml.tmpl`;
+> no functional/behavioral change was made.
+
 If the default kind service account issuer is not reachable or does not match the externally reachable API server address, update the VSO kind config template:
 
 ```text

@@ -12,6 +12,23 @@
 # VSO, or any demo workloads - see scripts/setup-vault-cluster.sh and
 # scripts/setup-vso-cluster.sh for that.
 #
+# Service account issuer / JWKS (Vault JWT/OIDC auth for VSO):
+#   Neither kind config template overrides kubeadm's default
+#   `service-account-issuer` (both clusters keep the default
+#   https://kubernetes.default.svc.cluster.local `iss` claim, which is
+#   cluster-internal and NOT reachable cross-cluster). This is intentional,
+#   not an oversight - see docs/vso-jwt-oidc-auth-spike-01.md and
+#   docs/vso-jwt-oidc-auth-task-02.md. Vault's `auth/jwt-vso` mount is
+#   instead configured with `jwks_url` pointed at the VSO cluster's
+#   externally-mapped API server address
+#   (https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}/openid/v1/jwks, TLS
+#   trust via the VSO cluster CA) plus `bound_issuer` set to the actual
+#   (cluster-internal, non-reachable) `iss` string, which Vault only string-
+#   compares and never fetches. This avoids any kind/kubeadm
+#   `service-account-issuer`/`service-account-jwks-uri` API server flag
+#   changes and keeps both kind config templates on kubeadm defaults for
+#   this concern.
+#
 # Usage:
 #   KIND_EXPERIMENTAL_PROVIDER=podman scripts/create-clusters.sh
 #   scripts/create-clusters.sh --check-only   # validate tools/env, no cluster changes
