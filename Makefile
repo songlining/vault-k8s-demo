@@ -1,4 +1,4 @@
-.PHONY: help setup demo verify status logs-otel logs-agent vso-demo vso-verify vso-status logs-vso
+.PHONY: help setup demo verify status logs-otel logs-agent vso-demo vso-deck vso-verify vso-status logs-vso
 .DEFAULT_GOAL := help
 
 help: ## Show available demo commands
@@ -13,6 +13,10 @@ demo: ## Run the guided live demo flow
 
 vso-demo: ## Run the guided Vault Secrets Operator (VSO) demo flow
 	@bash vso-demo.sh
+
+vso-deck: ## Run the VSO demo as a presenterm slide deck (requires presenterm; -x enables live code blocks)
+	@command -v presenterm >/dev/null 2>&1 || { echo "presenterm not installed: brew install presenterm"; exit 1; }
+	@presenterm -x presenterm/vso.md
 
 verify: ## Verify the demo environment is ready
 	@echo "Current context:"

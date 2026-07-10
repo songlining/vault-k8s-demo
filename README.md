@@ -185,19 +185,25 @@ End-to-end checklist to go from a clean machine to "ready to present."
 
 ### 1. Prerequisites
 
-- A disposable Kubernetes cluster (kind works well locally).
-- `kubectl` configured for that cluster.
+- **Podman Desktop** with Podman CLI installed (IBM standard container runtime).
+- `kubectl` installed.
 - `helm` installed.
 - The HashiCorp Helm chart repository available.
 
 ### 2. Bootstrap a fresh cluster
 
 ```sh
+# Set Podman as the kind provider (add to ~/.zshrc or ~/.bashrc for persistence)
+export KIND_EXPERIMENTAL_PROVIDER=podman
+
+# Create and configure the cluster
 kind create cluster --name vault-lab
 kubectl config use-context kind-vault-lab
 helm repo add hashicorp https://helm.releases.hashicorp.com
 helm repo update
 ```
+
+> **Note:** See [PODMAN_MIGRATION.md](PODMAN_MIGRATION.md) for detailed Podman setup instructions.
 
 ### 3. Build the demo environment
 
@@ -244,7 +250,7 @@ observability/vault-metrics-check
 - If the cluster has been idle a while, re-run `make setup` — it's safe and
   takes ~30s on an already-configured cluster.
 - For a totally fresh start: `kind delete cluster --name vault-lab` and return
-  to step 2.
+  to step 2. (Ensure `KIND_EXPERIMENTAL_PROVIDER=podman` is set).
 
 ## Presenter commands
 
@@ -623,6 +629,8 @@ helm repo add hashicorp https://helm.releases.hashicorp.com && helm repo update
 make setup
 ```
 
+(Ensure `KIND_EXPERIMENTAL_PROVIDER=podman` is set before creating the cluster).
+
 > **Note:** `vault-init-keys.json` contains the root token and unseal keys in
 > plaintext. It is fine for a disposable demo cluster but must never be used for
 > anything real or committed to git.
@@ -674,11 +682,11 @@ process environment to pick up the latest value.
 
 ## Cleanup
 
-If you used kind:
-
 ```sh
 kind delete cluster --name vault-lab
 ```
+
+(With `KIND_EXPERIMENTAL_PROVIDER=podman` set, this cleans up the Podman-based cluster).
 
 If you used another disposable Kubernetes cluster, delete the cluster or remove
 the demo resources using your normal cluster cleanup process.

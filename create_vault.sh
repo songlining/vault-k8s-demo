@@ -99,6 +99,8 @@ elif kubectl exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q '
     echo "  kind delete cluster --name vault-lab && kind create cluster --name vault-lab" >&2
     echo "  helm repo add hashicorp https://helm.releases.hashicorp.com && helm repo update" >&2
     echo "  make setup" >&2
+    echo "" >&2
+    echo "Note: Ensure KIND_EXPERIMENTAL_PROVIDER=podman is set when using Podman Desktop." >&2
     exit 1
   fi
 else
