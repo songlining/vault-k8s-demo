@@ -246,9 +246,52 @@
       "commitSummary": "feat:; feat:; docs: (+2 more); feat:; feat:; feat: (+2 more)"
     },
     "05": {
-      "status": "in_progress",
+      "status": "completed",
       "retries": 0,
-      "startedAt": "2026-07-10T04:23:38.512Z"
+      "startedAt": "2026-07-10T04:23:38.512Z",
+      "completedAt": "2026-07-10T04:30:32.701Z",
+      "durationMs": 382271,
+      "reflection": {
+        "taskId": "05",
+        "title": "expose-vault-cross-cluster",
+        "summary": "Implemented Vault cross-cluster exposure for the VSO two-cluster Podman demo: added an additive `vault-external` NodePort Service (port 8200 → nodePort 30820, matching the existing kind `extraPortMappings`) in `scripts/setup-vault-cluster.sh`, and created a reusable, diagnostic-rich connectivity-check script plus unit tests; validated live end-to-end against real `kind-vault-lab`/`kind-vso-lab` Podman-backed clusters.",
+        "keyLearnings": [
+          "- `scripts/lib/two-cluster-env.sh` (from task 03) already pre-declared `VAULT_NODE_PORT=30820`/`VAULT_HOST_PORT=8200`/`VAULT_ADDR=http://host.containers.internal:8200`, and `scripts/kind/vault-lab-config.yaml.tmpl` already had the matching `extraPortMappings` — task 05's job was purely to create the actual NodePort Service using those pre-agreed values, which I did as a new `vault-external` Service (selector `app.kubernetes.io/instance=vault,app.kubernetes.io/name=vault,component=server`, matching the vault-0 pod's real labels). This is additive and does not touch the Helm chart's own `vault`/`vault-internal` ClusterIP Services, so same-cluster consumers (Agent Injector, OTel) are unaffected.",
+          "- Discovered tasks 06 and 07 (`scripts/setup-vso-cluster.sh`, `scripts/configure-vso-kubernetes-auth.sh`) were already committed ahead of 05 by parallel/out-of-order execution — confirmed neither depends on the NodePort Service created here (07 handles the reverse direction: Vault→VSO API server auth via `VSO_API_ADDR`/port 6444), so no conflicts.",
+          "- `scripts/check-vault-connectivity.sh` runs a one-shot `kubectl run --rm -i --restart=Never --image=curlimages/curl` pod in `VSO_CONTEXT`, curls `${VAULT_ADDR}/v1/sys/health`, and treats HTTP codes `200|429|472|473|501|503` as connectivity success (Vault's health endpoint intentionally returns non-200 for sealed/standby/uninitialized states — this is a reachability check, not a readiness check). On `HTTP_CODE=000` (curl couldn't connect at all) it prints Podman/kind networking troubleshooting steps (host gateway resolution, extraPortMappings, missing `vault-external` Service, Podman machine not running).",
+          "- Verified live: `curl http://localhost:8200/v1/sys/health` from the host returns 200, and `scripts/check-vault-connectivity.sh` run with the real `VAULT_ADDR` returns `OK: reached Vault ... (HTTP 200)` from inside a pod in `kind-vso-lab`; also verified the failure path prints the expected diagnostics when pointed at a bad port.",
+          "- Both `scripts/setup-vault-cluster.sh` and `scripts/check-vault-connectivity.sh` are idempotent and safe to re-run against the already-live demo clusters (confirmed via repeated runs).",
+          "- Downstream tasks (VSO CRDs / VaultConnection in task 08) should use `VAULT_ADDR` from `scripts/lib/two-cluster-env.sh` as-is — it's already centralized and this task's Service creation makes it actually resolvable."
+        ],
+        "filesChanged": [
+          "scripts/setup-vault-cluster.sh (modified)",
+          "scripts/check-vault-connectivity.sh (created)",
+          "scripts/tests/test-check-vault-connectivity-validation.sh (created)",
+          "scripts/tests/test-vault-cross-cluster-exposure-validation.sh (created)"
+        ],
+        "timestamp": "2026-07-10T04:30:00.829Z"
+      },
+      "toolUsage": {
+        "read": 7,
+        "write": 3,
+        "edit": 4,
+        "bash": 29,
+        "other": 2
+      },
+      "outputPreview": "## REFLECTION\nSUMMARY: Implemented Vault cross-cluster exposure for the VSO two-cluster Podman demo: added an additive `vault-external` NodePort Service (port 8200 → nodePort 30820, matching the existing kind `extraPortMappings`) in `scripts/setup-vault-cluster.sh`, and created a reusable, diagnostic-rich connectivity-check script plus unit tests; validated live end-to-end against real `kind-vault-lab`/`kind-vso-lab` Podman-backed clusters.\n\nFILES: scripts/setup-vault-cluster.sh (modified), scri\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:"
+      ],
+      "commitSummary": "feat:; feat:; feat: (+2 more); feat:; feat:; feat: (+2 more)"
     },
     "07": {
       "status": "completed",
@@ -300,10 +343,15 @@
         "feat:"
       ],
       "commitSummary": "feat:; feat:; feat: (+2 more); feat:; feat:; feat: (+2 more)"
+    },
+    "08": {
+      "status": "in_progress",
+      "retries": 0,
+      "startedAt": "2026-07-10T04:30:32.703Z"
     }
   },
   "startedAt": "2026-07-10T04:06:04.856Z",
-  "lastUpdatedAt": "2026-07-10T04:27:08.618Z",
+  "lastUpdatedAt": "2026-07-10T04:30:32.703Z",
   "paused": false,
   "prds": {
     "tasks-vso-two-cluster-podman-README-md": {
@@ -554,9 +602,52 @@
           "commitSummary": "feat:; feat:; docs: (+2 more); feat:; feat:; feat: (+2 more)"
         },
         "05": {
-          "status": "in_progress",
+          "status": "completed",
           "retries": 0,
-          "startedAt": "2026-07-10T04:23:38.512Z"
+          "startedAt": "2026-07-10T04:23:38.512Z",
+          "completedAt": "2026-07-10T04:30:32.701Z",
+          "durationMs": 382271,
+          "reflection": {
+            "taskId": "05",
+            "title": "expose-vault-cross-cluster",
+            "summary": "Implemented Vault cross-cluster exposure for the VSO two-cluster Podman demo: added an additive `vault-external` NodePort Service (port 8200 → nodePort 30820, matching the existing kind `extraPortMappings`) in `scripts/setup-vault-cluster.sh`, and created a reusable, diagnostic-rich connectivity-check script plus unit tests; validated live end-to-end against real `kind-vault-lab`/`kind-vso-lab` Podman-backed clusters.",
+            "keyLearnings": [
+              "- `scripts/lib/two-cluster-env.sh` (from task 03) already pre-declared `VAULT_NODE_PORT=30820`/`VAULT_HOST_PORT=8200`/`VAULT_ADDR=http://host.containers.internal:8200`, and `scripts/kind/vault-lab-config.yaml.tmpl` already had the matching `extraPortMappings` — task 05's job was purely to create the actual NodePort Service using those pre-agreed values, which I did as a new `vault-external` Service (selector `app.kubernetes.io/instance=vault,app.kubernetes.io/name=vault,component=server`, matching the vault-0 pod's real labels). This is additive and does not touch the Helm chart's own `vault`/`vault-internal` ClusterIP Services, so same-cluster consumers (Agent Injector, OTel) are unaffected.",
+              "- Discovered tasks 06 and 07 (`scripts/setup-vso-cluster.sh`, `scripts/configure-vso-kubernetes-auth.sh`) were already committed ahead of 05 by parallel/out-of-order execution — confirmed neither depends on the NodePort Service created here (07 handles the reverse direction: Vault→VSO API server auth via `VSO_API_ADDR`/port 6444), so no conflicts.",
+              "- `scripts/check-vault-connectivity.sh` runs a one-shot `kubectl run --rm -i --restart=Never --image=curlimages/curl` pod in `VSO_CONTEXT`, curls `${VAULT_ADDR}/v1/sys/health`, and treats HTTP codes `200|429|472|473|501|503` as connectivity success (Vault's health endpoint intentionally returns non-200 for sealed/standby/uninitialized states — this is a reachability check, not a readiness check). On `HTTP_CODE=000` (curl couldn't connect at all) it prints Podman/kind networking troubleshooting steps (host gateway resolution, extraPortMappings, missing `vault-external` Service, Podman machine not running).",
+              "- Verified live: `curl http://localhost:8200/v1/sys/health` from the host returns 200, and `scripts/check-vault-connectivity.sh` run with the real `VAULT_ADDR` returns `OK: reached Vault ... (HTTP 200)` from inside a pod in `kind-vso-lab`; also verified the failure path prints the expected diagnostics when pointed at a bad port.",
+              "- Both `scripts/setup-vault-cluster.sh` and `scripts/check-vault-connectivity.sh` are idempotent and safe to re-run against the already-live demo clusters (confirmed via repeated runs).",
+              "- Downstream tasks (VSO CRDs / VaultConnection in task 08) should use `VAULT_ADDR` from `scripts/lib/two-cluster-env.sh` as-is — it's already centralized and this task's Service creation makes it actually resolvable."
+            ],
+            "filesChanged": [
+              "scripts/setup-vault-cluster.sh (modified)",
+              "scripts/check-vault-connectivity.sh (created)",
+              "scripts/tests/test-check-vault-connectivity-validation.sh (created)",
+              "scripts/tests/test-vault-cross-cluster-exposure-validation.sh (created)"
+            ],
+            "timestamp": "2026-07-10T04:30:00.829Z"
+          },
+          "toolUsage": {
+            "read": 7,
+            "write": 3,
+            "edit": 4,
+            "bash": 29,
+            "other": 2
+          },
+          "outputPreview": "## REFLECTION\nSUMMARY: Implemented Vault cross-cluster exposure for the VSO two-cluster Podman demo: added an additive `vault-external` NodePort Service (port 8200 → nodePort 30820, matching the existing kind `extraPortMappings`) in `scripts/setup-vault-cluster.sh`, and created a reusable, diagnostic-rich connectivity-check script plus unit tests; validated live end-to-end against real `kind-vault-lab`/`kind-vso-lab` Podman-backed clusters.\n\nFILES: scripts/setup-vault-cluster.sh (modified), scri\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:"
+          ],
+          "commitSummary": "feat:; feat:; feat: (+2 more); feat:; feat:; feat: (+2 more)"
         },
         "07": {
           "status": "completed",
@@ -608,10 +699,15 @@
             "feat:"
           ],
           "commitSummary": "feat:; feat:; feat: (+2 more); feat:; feat:; feat: (+2 more)"
+        },
+        "08": {
+          "status": "in_progress",
+          "retries": 0,
+          "startedAt": "2026-07-10T04:30:32.703Z"
         }
       },
       "startedAt": "2026-07-10T04:06:04.856Z",
-      "lastUpdatedAt": "2026-07-10T04:27:08.618Z",
+      "lastUpdatedAt": "2026-07-10T04:30:32.703Z",
       "paused": false
     }
   }
