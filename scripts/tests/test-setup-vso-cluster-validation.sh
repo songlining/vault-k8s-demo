@@ -6,9 +6,20 @@
 #   - missing/unknown VSO_CONTEXT
 #   - unknown flag
 #   - happy path (--check-only, no cluster mutation)
+#   - static safety review:
+#       * the legacy TokenReview reviewer identity (vault-token-reviewer SA +
+#         system:auth-delegator ClusterRoleBinding) is not created unless
+#         ENABLE_TOKEN_REVIEWER_AUTH=1 is explicitly set
+#       * the oidc-discovery-reader ClusterRole/ClusterRoleBinding (needed
+#         by the default JWT/OIDC auth path) is created unconditionally
+#       * the vso-demo namespace and service account are still created
+#         unconditionally
+#       * every live-cluster kubectl/helm invocation uses an explicit
+#         context wrapper
 #
 # These tests never install the operator or mutate any real cluster -- they
-# only exercise the fast-failing validation path via `--check-only`.
+# only exercise the fast-failing validation path via `--check-only` and
+# static review of the script contents.
 #
 # Usage: scripts/tests/test-setup-vso-cluster-validation.sh
 
@@ -107,6 +118,98 @@ if [ -n "$bare_calls" ]; then
 else
   echo "PASS: every kubectl/helm invocation uses an explicit-context wrapper"
   pass=$((pass + 1))
+fi
+
+# --- Static safety review ---------------------------------------------------
+
+# 7. The legacy TokenReview reviewer identity default must be off
+#    (ENABLE_TOKEN_REVIEWER_AUTH defaults to 0), and both the reviewer
+#    ServiceAccount and the system:auth-delegator ClusterRoleBinding must
+#    only be emitted inside a guard on that variable being "1" -- never
+#    unconditionally.
+if grep -qE 'ENABLE_TOKEN_REVIEWER_AUTH="\$\{ENABLE_TOKEN_REVIEWER_AUTH:-0\}"' "$SETUP_VSO"; then
+  echo "PASS: ENABLE_TOKEN_REVIEWER_AUTH defaults to 0 (off)"
+  pass=$((pass + 1))
+else
+  echo "FAIL: ENABLE_TOKEN_REVIEWER_AUTH is not declared with a default of 0"
+  fail=$((fail + 1))
+fi
+
+if grep -qE 'if \[ "\$ENABLE_TOKEN_REVIEWER_AUTH" = "1" \]; then' "$SETUP_VSO"; then
+  echo "PASS: script gates the legacy TokenReview reviewer identity behind an explicit ENABLE_TOKEN_REVIEWER_AUTH=1 check"
+  pass=$((pass + 1))
+else
+  echo "FAIL: script does not appear to gate the legacy TokenReview reviewer identity behind ENABLE_TOKEN_REVIEWER_AUTH"
+  fail=$((fail + 1))
+fi
+
+# 8. The reviewer ServiceAccount manifest (kind: ServiceAccount, name:
+#    ${VAULT_TOKEN_REVIEWER_SA}) and the system:auth-delegator
+#    ClusterRoleBinding must appear strictly between the
+#    ENABLE_TOKEN_REVIEWER_AUTH guard's `if` and its closing `fi`/`else`,
+#    not before it (i.e. not unconditionally created earlier in the
+#    script).
+guard_line=$(grep -n 'if \[ "\$ENABLE_TOKEN_REVIEWER_AUTH" = "1" \]; then' "$SETUP_VSO" | head -1 | cut -d: -f1)
+reviewer_sa_line=$(grep -n 'name: \${VAULT_TOKEN_REVIEWER_SA}' "$SETUP_VSO" | head -1 | cut -d: -f1)
+auth_delegator_line=$(grep -n 'name: system:auth-delegator' "$SETUP_VSO" | head -1 | cut -d: -f1)
+if [ -n "$guard_line" ] && [ -n "$reviewer_sa_line" ] && [ -n "$auth_delegator_line" ] \
+    && [ "$reviewer_sa_line" -gt "$guard_line" ] && [ "$auth_delegator_line" -gt "$guard_line" ]; then
+  echo "PASS: reviewer ServiceAccount and system:auth-delegator ClusterRoleBinding are declared after (inside) the ENABLE_TOKEN_REVIEWER_AUTH guard"
+  pass=$((pass + 1))
+else
+  echo "FAIL: could not confirm the reviewer ServiceAccount/ClusterRoleBinding are declared inside the ENABLE_TOKEN_REVIEWER_AUTH guard"
+  echo "  guard_line=${guard_line:-<none>} reviewer_sa_line=${reviewer_sa_line:-<none>} auth_delegator_line=${auth_delegator_line:-<none>}"
+  fail=$((fail + 1))
+fi
+
+# 9. The vso-demo namespace and service account must still be created
+#    unconditionally (before/outside the ENABLE_TOKEN_REVIEWER_AUTH guard).
+vso_demo_sa_line=$(grep -n 'name: vso-demo$' "$SETUP_VSO" | head -1 | cut -d: -f1)
+namespace_line=$(grep -n 'kind: Namespace' "$SETUP_VSO" | head -1 | cut -d: -f1)
+if [ -n "$vso_demo_sa_line" ] && [ -n "$namespace_line" ] \
+    && { [ -z "$guard_line" ] || { [ "$vso_demo_sa_line" -lt "$guard_line" ] && [ "$namespace_line" -lt "$guard_line" ]; }; }; then
+  echo "PASS: vso-demo namespace and service account are created unconditionally"
+  pass=$((pass + 1))
+else
+  echo "FAIL: vso-demo namespace/service account are missing or unexpectedly gated"
+  fail=$((fail + 1))
+fi
+
+# 10. The oidc-discovery-reader ClusterRole/ClusterRoleBinding (required by
+#     the default JWT/OIDC auth path to let Vault fetch JWKS/discovery
+#     unauthenticated) must be created unconditionally, not gated behind
+#     ENABLE_TOKEN_REVIEWER_AUTH.
+oidc_role_line=$(grep -n 'name: oidc-discovery-reader$' "$SETUP_VSO" | head -1 | cut -d: -f1)
+oidc_binding_line=$(grep -n 'name: oidc-discovery-reader-binding' "$SETUP_VSO" | head -1 | cut -d: -f1)
+if [ -n "$oidc_role_line" ] && [ -n "$oidc_binding_line" ] \
+    && { [ -z "$guard_line" ] || { [ "$oidc_role_line" -lt "$guard_line" ] && [ "$oidc_binding_line" -lt "$guard_line" ]; }; }; then
+  echo "PASS: oidc-discovery-reader ClusterRole/ClusterRoleBinding are created unconditionally (default JWT/OIDC path)"
+  pass=$((pass + 1))
+else
+  echo "FAIL: oidc-discovery-reader ClusterRole/ClusterRoleBinding are missing or unexpectedly gated"
+  fail=$((fail + 1))
+fi
+
+# 11. Live-cluster proof (best-effort, non-mutating): if the VSO cluster's
+#     vso-demo namespace already exists from a previous default (non-legacy)
+#     run, the vault-token-reviewer service account should not be present.
+if command -v kubectl >/dev/null 2>&1 && kubectl config get-contexts kind-vso-lab >/dev/null 2>&1 \
+    && kubectl --context kind-vso-lab get namespace vso-demo >/dev/null 2>&1; then
+  if kubectl --context kind-vso-lab get serviceaccount vault-token-reviewer -n vso-demo >/dev/null 2>&1; then
+    echo "NOTE: live cluster has a 'vault-token-reviewer' SA in vso-demo (likely from a prior ENABLE_TOKEN_REVIEWER_AUTH=1 run or older setup) -- not treated as a failure, just informational."
+  else
+    echo "PASS: live vso-demo namespace has no 'vault-token-reviewer' service account"
+    pass=$((pass + 1))
+  fi
+  if kubectl --context kind-vso-lab get serviceaccount vso-demo -n vso-demo >/dev/null 2>&1; then
+    echo "PASS: live vso-demo namespace has the 'vso-demo' service account"
+    pass=$((pass + 1))
+  else
+    echo "FAIL: live vso-demo namespace is missing the 'vso-demo' service account"
+    fail=$((fail + 1))
+  fi
+else
+  echo "SKIP: live-cluster proof (kind-vso-lab context/vso-demo namespace not available in this environment)"
 fi
 
 echo ""

@@ -6,16 +6,41 @@
 # cluster (VSO_CONTEXT / kind-vso-lab by default).
 #
 # This script does NOT touch the Vault cluster, does NOT configure Vault
-# Kubernetes auth, and does NOT apply VSO CRDs (VaultConnection/VaultAuth/
-# VaultStaticSecret) - those are handled by later tasks once cross-cluster
-# auth is wired up. This is cluster-scaffolding only:
+# JWT/OIDC or Kubernetes auth, and does NOT apply VSO CRDs (VaultConnection/
+# VaultAuth/VaultStaticSecret) - those are handled by later scripts once
+# cross-cluster auth is wired up. This is cluster-scaffolding only:
 #   - installs the vault-secrets-operator Helm chart in $VSO_OPERATOR_NAMESPACE
 #   - creates the $VSO_NAMESPACE namespace
 #   - creates the 'vso-demo' service account (what VSO's VaultAuth will use)
+#   - grants unauthenticated read access to this cluster's OIDC discovery/
+#     JWKS endpoints (see "OIDC discovery reader RBAC" below), which Vault's
+#     JWT/OIDC auth method (auth/${VSO_JWT_AUTH_MOUNT}, configured by
+#     scripts/configure-vso-jwt-auth.sh) needs to validate 'vso-demo'
+#     service account JWTs directly, with no call back into this cluster.
+#
+# Default auth model: JWT/OIDC (no TokenReview reviewer identity)
+# ----------------------------------------------------------------
+# The demo's default cross-cluster auth path is Vault JWT/OIDC auth
+# (auth/${VSO_JWT_AUTH_MOUNT}, see scripts/configure-vso-jwt-auth.sh and
+# docs/vso-jwt-oidc-auth-plan.md). Vault validates 'vso-demo' service
+# account JWTs against this cluster's JWKS signing keys directly -- it
+# never calls back into this cluster's TokenReview API, and no reviewer
+# JWT is ever stored in Vault. Because of that, this script does NOT
+# create a 'vault-token-reviewer' service account or bind
+# 'system:auth-delegator' by default.
+#
+# Legacy TokenReview compatibility path (off by default)
+# -------------------------------------------------------
+# The older Vault Kubernetes auth path (auth/${VSO_AUTH_MOUNT}, configured
+# by scripts/configure-vso-kubernetes-auth.sh) is kept only as an explicit,
+# opt-in comparison/migration path -- it is legacy/demo-comparison only,
+# not the recommended setup. It requires a reviewer service account with
+# TokenReview RBAC. Set ENABLE_TOKEN_REVIEWER_AUTH=1 to also create that
+# reviewer identity here:
 #   - creates the '$VAULT_TOKEN_REVIEWER_SA' service account + TokenReview
-#     RBAC (system:auth-delegator) so Vault's Kubernetes auth config can use
-#     it as the reviewer identity when validating tokens against this
-#     cluster's API server.
+#     RBAC (system:auth-delegator) so Vault's legacy Kubernetes auth config
+#     can use it as the reviewer identity when validating tokens against
+#     this cluster's API server.
 #
 # Every kubectl/helm operation here targets $VSO_CONTEXT explicitly; it never
 # relies on (or changes) the caller's current kubectl context.
@@ -23,12 +48,20 @@
 # Usage:
 #   VSO_CONTEXT=kind-vso-lab scripts/setup-vso-cluster.sh
 #   scripts/setup-vso-cluster.sh --check-only   # validate tools/context only
+#   ENABLE_TOKEN_REVIEWER_AUTH=1 scripts/setup-vso-cluster.sh   # legacy TokenReview compat path
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib/two-cluster-env.sh
 source "${SCRIPT_DIR}/lib/two-cluster-env.sh"
+
+# Explicit, off-by-default compatibility flag for the legacy TokenReview
+# reviewer identity (vault-token-reviewer SA + system:auth-delegator
+# binding). Only needed if you intend to run the legacy
+# scripts/configure-vso-kubernetes-auth.sh path for comparison against the
+# default JWT/OIDC path; see docs/vso-jwt-oidc-auth-plan.md Phase 5.
+ENABLE_TOKEN_REVIEWER_AUTH="${ENABLE_TOKEN_REVIEWER_AUTH:-0}"
 
 CHECK_ONLY=0
 for arg in "$@"; do
@@ -37,7 +70,7 @@ for arg in "$@"; do
       CHECK_ONLY=1
       ;;
     -h|--help)
-      sed -n '2,30p' "${BASH_SOURCE[0]}"
+      sed -n '2,51p' "${BASH_SOURCE[0]}"
       exit 0
       ;;
     *)
@@ -79,9 +112,9 @@ kubectl_vso wait -n "$VSO_OPERATOR_NAMESPACE" \
   --for=condition=Available deployment \
   -l app.kubernetes.io/name=vault-secrets-operator --timeout=180s
 
-# --- vso-demo namespace + service accounts --------------------------------
+# --- vso-demo namespace + service account ---------------------------------
 
-echo "==> Creating namespace '${VSO_NAMESPACE}' and service accounts..."
+echo "==> Creating namespace '${VSO_NAMESPACE}' and service account..."
 kubectl_vso apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
@@ -93,7 +126,61 @@ kind: ServiceAccount
 metadata:
   name: vso-demo
   namespace: ${VSO_NAMESPACE}
+EOF
+
+# --- OIDC discovery reader RBAC (default JWT/OIDC auth path) --------------
+#
+# Vault's JWT/OIDC auth method (auth/${VSO_JWT_AUTH_MOUNT}, configured in
+# scripts/configure-vso-jwt-auth.sh) fetches this cluster's JWKS signing
+# keys directly from its API server (jwks_url, see
+# docs/vso-jwt-oidc-auth-spike-01.md) to validate 'vso-demo' service
+# account JWTs. That fetch is an unauthenticated GET -- Vault's JWT auth
+# does not send a bearer token when retrieving JWKS/discovery documents.
+#
+# Default kind/kubeadm RBAC does not grant unauthenticated callers access
+# to '/.well-known/openid-configuration' or '/openid/v1/jwks' (only a
+# small set of health/version paths are covered by
+# system:public-info-viewer). This ClusterRole/ClusterRoleBinding closes
+# that gap by granting 'system:unauthenticated' read access to exactly
+# those two non-resource URLs -- nothing else.
+echo "==> Granting OIDC discovery/JWKS read access to unauthenticated callers..."
+kubectl_vso apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oidc-discovery-reader
+rules:
+- nonResourceURLs:
+  - /.well-known/openid-configuration
+  - /openid/v1/jwks
+  verbs:
+  - get
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oidc-discovery-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: oidc-discovery-reader
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:unauthenticated
+EOF
+
+# --- Legacy TokenReview reviewer identity (opt-in, off by default) --------
+#
+# Only created when ENABLE_TOKEN_REVIEWER_AUTH=1. This is legacy/demo
+# comparison support for the older Vault Kubernetes auth path
+# (auth/${VSO_AUTH_MOUNT}, scripts/configure-vso-kubernetes-auth.sh) which
+# authenticates incoming JWTs by calling the TokenReview API. The default
+# JWT/OIDC auth path (auth/${VSO_JWT_AUTH_MOUNT}) does not use or require
+# this service account.
+if [ "$ENABLE_TOKEN_REVIEWER_AUTH" = "1" ]; then
+  echo "==> ENABLE_TOKEN_REVIEWER_AUTH=1: creating legacy TokenReview reviewer identity '${VAULT_TOKEN_REVIEWER_SA}'..."
+  kubectl_vso apply -f - <<EOF
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -101,15 +188,8 @@ metadata:
   namespace: ${VSO_NAMESPACE}
 EOF
 
-# --- TokenReview RBAC for the reviewer identity ---------------------------
-#
-# Vault's Kubernetes auth method (mounted against this cluster's API server
-# as auth/kubernetes-vso - configured in a later task) authenticates
-# incoming JWTs by calling the TokenReview API as this service account.
-# system:auth-delegator grants both TokenReview and SubjectAccessReview,
-# which is the standard binding used for Kubernetes auth "reviewer" SAs.
-echo "==> Binding TokenReview RBAC to '${VAULT_TOKEN_REVIEWER_SA}'..."
-kubectl_vso apply -f - <<EOF
+  echo "==> Binding TokenReview RBAC to '${VAULT_TOKEN_REVIEWER_SA}'..."
+  kubectl_vso apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -123,11 +203,20 @@ subjects:
   name: ${VAULT_TOKEN_REVIEWER_SA}
   namespace: ${VSO_NAMESPACE}
 EOF
+else
+  echo "==> Skipping legacy TokenReview reviewer identity (default JWT/OIDC auth path does not need it)."
+  echo "    Set ENABLE_TOKEN_REVIEWER_AUTH=1 to create '${VAULT_TOKEN_REVIEWER_SA}' + system:auth-delegator for comparison."
+fi
 
 echo ""
 echo "VSO cluster setup complete (context: ${VSO_CONTEXT})."
 echo "  - Operator namespace: ${VSO_OPERATOR_NAMESPACE}"
-echo "  - Demo namespace:     ${VSO_NAMESPACE} (service accounts: vso-demo, ${VAULT_TOKEN_REVIEWER_SA})"
+echo "  - Demo namespace:     ${VSO_NAMESPACE} (service account: vso-demo)"
+echo "  - Default auth path:  JWT/OIDC (auth/${VSO_JWT_AUTH_MOUNT}) - no TokenReview reviewer identity required"
+if [ "$ENABLE_TOKEN_REVIEWER_AUTH" = "1" ]; then
+  echo "  - Legacy compat:      TokenReview reviewer identity '${VAULT_TOKEN_REVIEWER_SA}' created (ENABLE_TOKEN_REVIEWER_AUTH=1)"
+fi
 echo ""
-echo "Not done here (see later tasks): Vault Kubernetes auth configuration"
-echo "(auth/kubernetes-vso) and VSO CRDs (VaultConnection/VaultAuth/VaultStaticSecret)."
+echo "Not done here (see other scripts): Vault JWT/OIDC auth configuration"
+echo "(auth/${VSO_JWT_AUTH_MOUNT}, scripts/configure-vso-jwt-auth.sh) and VSO CRDs"
+echo "(VaultConnection/VaultAuth/VaultStaticSecret, scripts/apply-vso-demo.sh)."
