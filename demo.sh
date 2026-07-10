@@ -1,8 +1,22 @@
 #!/usr/bin/env bash
+# demo.sh
+#
+# Guided demo of the single-cluster Vault Kubernetes auth + Agent Injector +
+# OTel metrics flow. This flow is entirely self-contained within the Vault
+# cluster (VAULT_CONTEXT, default kind-vault-lab) -- it does not touch VSO
+# or the VSO cluster at all (see vso-demo.sh for the two-cluster VSO flow).
+#
+# Every kubectl command below targets VAULT_CONTEXT explicitly via
+# `--context`, rather than relying on the ambient
+# `kubectl config current-context`, since a two-cluster (Vault + VSO)
+# environment may otherwise be pointed elsewhere.
+
 set -euo pipefail
 
-NAMESPACE="${NAMESPACE:-default}"
-OBSERVABILITY_NAMESPACE="${OBSERVABILITY_NAMESPACE:-observability}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./scripts/lib/two-cluster-env.sh
+source "${SCRIPT_DIR}/scripts/lib/two-cluster-env.sh"
+
 VAULT_SERVICE_HOST="${VAULT_SERVICE_HOST:-vault.${NAMESPACE}.svc.cluster.local}"
 VAULT_METRICS_URL="http://${VAULT_SERVICE_HOST}:8200/v1/sys/metrics?format=prometheus"
 NO_WAIT="${NO_WAIT:-false}"
@@ -58,23 +72,19 @@ pe() {
   printf "\n"
 }
 
-require_command() {
-  local command_name="$1"
-
-  if ! command -v "$command_name" >/dev/null 2>&1; then
-    printf "Missing required command: %s\n" "$command_name" >&2
+verify_ready() {
+  fail=0
+  require_commands kubectl || fail=1
+  require_context "$VAULT_CONTEXT" || fail=1
+  if [ "$fail" -ne 0 ]; then
     exit 1
   fi
-}
 
-verify_ready() {
-  require_command kubectl
-
-  kubectl get pod vault-0 -n "$NAMESPACE" >/dev/null
-  kubectl get pod vault-metrics-check -n "$OBSERVABILITY_NAMESPACE" >/dev/null
-  kubectl wait -n "$NAMESPACE" --for=condition=Ready pod/vault-0 --timeout=10s >/dev/null
-  kubectl wait -n "$OBSERVABILITY_NAMESPACE" --for=condition=Ready pod/vault-metrics-check --timeout=10s >/dev/null
-  kubectl wait -n "$OBSERVABILITY_NAMESPACE" --for=condition=Ready pod -l app=otel-collector --timeout=10s >/dev/null
+  kubectl_vault get pod vault-0 -n "$NAMESPACE" >/dev/null
+  kubectl_vault get pod vault-metrics-check -n "$OBSERVABILITY_NAMESPACE" >/dev/null
+  kubectl_vault wait -n "$NAMESPACE" --for=condition=Ready pod/vault-0 --timeout=10s >/dev/null
+  kubectl_vault wait -n "$OBSERVABILITY_NAMESPACE" --for=condition=Ready pod/vault-metrics-check --timeout=10s >/dev/null
+  kubectl_vault wait -n "$OBSERVABILITY_NAMESPACE" --for=condition=Ready pod -l app=otel-collector --timeout=10s >/dev/null
 }
 
 verify_ready
@@ -101,7 +111,11 @@ INTRO
 pause
 
 section "1. Architecture: how the pieces fit"
-cat <<'ARCH'
+cat <<ARCH
+This entire flow runs in a single cluster: the Vault cluster
+(context: ${VAULT_CONTEXT}). It does not involve the Vault Secrets Operator
+or the separate VSO cluster used by the VSO demo (see vso-demo.sh).
+
 observability/otel-collector ServiceAccount
         |
         | (1) SA JWT
@@ -121,10 +135,10 @@ pause
 
 section "2. Confirm the demo workloads"
 p "Vault is running in the default namespace"
-pe "kubectl get pods -n ${NAMESPACE}"
+pe "kubectl --context ${VAULT_CONTEXT} get pods -n ${NAMESPACE}"
 
 p "The OTel collector and metrics check pod are in the observability namespace"
-pe "kubectl get pods -n ${OBSERVABILITY_NAMESPACE}"
+pe "kubectl --context ${VAULT_CONTEXT} get pods -n ${OBSERVABILITY_NAMESPACE}"
 
 cat <<'POINTS'
 Key points:
@@ -135,7 +149,7 @@ pause
 
 section "3. Show the OTel scrape configuration"
 p "The Prometheus receiver uses bearer_token_file instead of a static token"
-pe "kubectl get configmap otel-collector-config -n ${OBSERVABILITY_NAMESPACE} -o jsonpath='{.data.config\\.yaml}' | sed -n '/receivers:/,/processors:/p'"
+pe "kubectl --context ${VAULT_CONTEXT} get configmap otel-collector-config -n ${OBSERVABILITY_NAMESPACE} -o jsonpath='{.data.config\\.yaml}' | sed -n '/receivers:/,/processors:/p'"
 
 cat <<'POINTS'
 Key points:
@@ -147,7 +161,7 @@ pause
 
 section "4. Prove unauthenticated metrics are blocked"
 p "Call sys/metrics with no Vault token"
-pe "kubectl exec -n ${OBSERVABILITY_NAMESPACE} vault-metrics-check -c vault-metrics-check -- sh -c 'curl -s -o /tmp/vault-metrics-unauth.out -w \"%{http_code}\" \"${VAULT_METRICS_URL}\"'"
+pe "kubectl --context ${VAULT_CONTEXT} exec -n ${OBSERVABILITY_NAMESPACE} vault-metrics-check -c vault-metrics-check -- sh -c 'curl -s -o /tmp/vault-metrics-unauth.out -w \"%{http_code}\" \"${VAULT_METRICS_URL}\"'"
 
 cat <<'POINTS'
 Expected result:
@@ -160,10 +174,10 @@ pause
 
 section "5. Show Vault Agent's injected token file"
 p "Show that Vault Agent wrote a token file for the workload"
-pe "kubectl exec -n ${OBSERVABILITY_NAMESPACE} vault-metrics-check -c vault-metrics-check -- ls -l /vault/secrets/token"
+pe "kubectl --context ${VAULT_CONTEXT} exec -n ${OBSERVABILITY_NAMESPACE} vault-metrics-check -c vault-metrics-check -- ls -l /vault/secrets/token"
 
 p "Show the pod annotations that request token injection"
-pe "kubectl get pod -n ${OBSERVABILITY_NAMESPACE} vault-metrics-check -o yaml | grep '^    vault.hashicorp.com'"
+pe "kubectl --context ${VAULT_CONTEXT} get pod -n ${OBSERVABILITY_NAMESPACE} vault-metrics-check -o yaml | grep '^    vault.hashicorp.com'"
 
 cat <<'POINTS'
 Key points:
@@ -174,7 +188,7 @@ pause
 
 section "6. Prove authenticated metrics work"
 p "Use the injected token file as the Vault token header"
-pe "kubectl exec -n ${OBSERVABILITY_NAMESPACE} vault-metrics-check -c vault-metrics-check -- sh -c 'curl -sf -H \"X-Vault-Token: \$(cat /vault/secrets/token)\" \"${VAULT_METRICS_URL}\" | grep -E \"^vault_(core_unsealed|core_active|runtime_alloc_bytes|runtime_num_goroutines|token_create_count) \" | head -10'"
+pe "kubectl --context ${VAULT_CONTEXT} exec -n ${OBSERVABILITY_NAMESPACE} vault-metrics-check -c vault-metrics-check -- sh -c 'curl -sf -H \"X-Vault-Token: \$(cat /vault/secrets/token)\" \"${VAULT_METRICS_URL}\" | grep -E \"^vault_(core_unsealed|core_active|runtime_alloc_bytes|runtime_num_goroutines|token_create_count) \" | head -10'"
 
 cat <<'POINTS'
 Expected result, real Vault metric samples with values, for example:
@@ -192,10 +206,10 @@ pause
 
 section "7. Show least-privilege Vault access"
 p "The metrics policy can only read sys/metrics"
-pe "kubectl exec vault-0 -n ${NAMESPACE} -- vault policy read vault-metrics-read"
+pe "kubectl --context ${VAULT_CONTEXT} exec vault-0 -n ${NAMESPACE} -- vault policy read vault-metrics-read"
 
 p "The Kubernetes auth role is bound only to observability/otel-collector"
-pe "kubectl exec vault-0 -n ${NAMESPACE} -- vault read auth/kubernetes/role/otel-vault-metrics | grep -E 'bound_service_account_names|bound_service_account_namespaces|token_policies|policies'"
+pe "kubectl --context ${VAULT_CONTEXT} exec vault-0 -n ${NAMESPACE} -- vault read auth/kubernetes/role/otel-vault-metrics | grep -E 'bound_service_account_names|bound_service_account_namespaces|token_policies|policies'"
 
 cat <<'POINTS'
 Key points:
@@ -208,7 +222,7 @@ pause
 
 section "8. Baseline secret sidecar demo"
 p "The original sidecar demo still works and is separate from the OTel path"
-pe "kubectl exec vault-demo -n ${NAMESPACE} -c vault-demo -- cat /vault/secrets/mysecret"
+pe "kubectl --context ${VAULT_CONTEXT} exec vault-demo -n ${NAMESPACE} -c vault-demo -- cat /vault/secrets/mysecret"
 
 cat <<'POINTS'
 Key points:
@@ -220,7 +234,7 @@ pause
 
 section "Demo complete"
 printf "%s" "$GREEN"
-cat <<'SUMMARY'
+cat <<SUMMARY
 What we proved:
   - Unauthenticated metrics access stays blocked.
   - Kubernetes auth validates the OTel collector's service account identity.
@@ -230,7 +244,7 @@ What we proved:
 
 Useful follow-up commands:
   make verify
-  kubectl logs -n observability deployment/otel-collector -c otel-collector --tail=50
-  kubectl exec vault-0 -- vault read auth/kubernetes/role/otel-vault-metrics
+  kubectl --context ${VAULT_CONTEXT} logs -n observability deployment/otel-collector -c otel-collector --tail=50
+  kubectl --context ${VAULT_CONTEXT} exec vault-0 -- vault read auth/kubernetes/role/otel-vault-metrics
 SUMMARY
 printf "%s" "$RESET"

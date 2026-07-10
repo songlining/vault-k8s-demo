@@ -15,7 +15,7 @@ Tasks
 - [x] 07 — configure-vso-kubernetes-auth → `07-configure-vso-kubernetes-auth.md`
 - [x] 08 — apply-vso-crds-and-consuming-app → `08-apply-vso-crds-and-consuming-app.md`
 - [x] 09 — update-make-targets → `09-update-make-targets.md`
-- [~] 10 — update-demo-scripts → `10-update-demo-scripts.md`
+- [x] 10 — update-demo-scripts → `10-update-demo-scripts.md`
 - [ ] 11 — add-two-cluster-verification → `11-add-two-cluster-verification.md`
 - [ ] 12 — update-documentation-and-slides → `12-update-documentation-and-slides.md`
 
