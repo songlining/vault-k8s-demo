@@ -1,5 +1,23 @@
 # Audit: Single-Cluster Assumptions in the Vault/VSO Demo
 
+> **Superseded on auth method.** This audit was a discovery task performed
+> against the *pre-migration* single-cluster codebase. It inventories every
+> assumption that existed at the time and recommends follow-up fixes,
+> including the original TokenReview / `auth/kubernetes-vso` /
+> `vault-token-reviewer` / `system:auth-delegator` auth path for the
+> two-cluster VSO demo. The **implemented** demo has since adopted
+> **JWT/OIDC** auth (`auth/jwt-vso`) as the default — validating the VSO
+> cluster's service account JWTs cryptographically against its own JWKS
+> endpoint with strict issuer/audience/subject claim binding and **no
+> `token_reviewer_jwt` stored in Vault**. See
+> [`vso-jwt-oidc-auth-plan.md`](./vso-jwt-oidc-auth-plan.md) for the
+> JWT/OIDC migration design. This audit remains a valid historical record
+> of the single-cluster assumptions that existed and the migration tracking
+> that was performed; its auth-specific recommendations (section 3, and
+> the `auth/kubernetes-vso` / `vault-token-reviewer` references throughout)
+> describe the **original** plan and have been superseded by the JWT/OIDC
+> implementation.
+
 Governing plan: [`docs/vso-two-cluster-podman-plan.md`](./vso-two-cluster-podman-plan.md).
 
 This audit inventories every place in the repo that currently assumes Vault,

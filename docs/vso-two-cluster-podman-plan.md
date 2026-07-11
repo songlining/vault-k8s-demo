@@ -1,5 +1,31 @@
 # VSO two-cluster Podman Desktop migration plan
 
+> **Superseded on auth method.** This plan originally specified the
+> cross-cluster VSO auth path as **Kubernetes auth** (`auth/kubernetes-vso`)
+> using **TokenReview** with a `vault-token-reviewer` service account and
+> `system:auth-delegator` RBAC binding in the VSO cluster — including a
+> stored `token_reviewer_jwt` in Vault. The **implemented** demo instead
+> uses **JWT/OIDC** auth (`auth/jwt-vso`), which validates the VSO
+> cluster's service account JWTs **cryptographically** against that
+> cluster's own JWKS endpoint with strict issuer/audience/subject claim
+> binding and **no `token_reviewer_jwt` stored in Vault**. The JWT/OIDC
+> design is the default production-oriented path. See
+> [`vso-jwt-oidc-auth-plan.md`](./vso-jwt-oidc-auth-plan.md) for the full
+> JWT/OIDC migration rationale, target architecture, and implementation
+> phases. The older TokenReview path (`scripts/configure-vso-kubernetes-auth.sh`)
+> is preserved in this repo purely as a side-by-side comparison path — it
+> is **not** run by `make setup` and has no Makefile entry point.
+>
+> **What is accurate vs. stale below:** the two-cluster Podman/kind topology,
+> cross-cluster networking via `host.containers.internal`, port mappings,
+> context-explicit scripts, and the verification acceptance criteria are
+> all still accurate. The auth-specific sections — `auth/kubernetes-vso`,
+> TokenReview, `vault-token-reviewer`, `system:auth-delegator`,
+> `token_reviewer_jwt`, and the `VaultAuth.spec.method: kubernetes` /
+> `mount: kubernetes-vso` manifest examples — describe the **original**
+> plan and have been replaced by `auth/jwt-vso`, JWKS-based validation, and
+> `VaultAuth.spec.method: jwt` / `mount: jwt-vso` in the implementation.
+
 ## Goal
 
 Update the VSO demo from a single kind cluster to two Podman-backed kind clusters:

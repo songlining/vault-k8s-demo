@@ -182,12 +182,44 @@ else
   pass=$((pass + 1))
 fi
 
-# 10. The dedicated cross-cluster auth mount (auth/kubernetes-vso, via
-#     VSO_AUTH_MOUNT) is referenced, not the same-cluster auth/kubernetes
-#     mount used by the Agent Injector/OTel demo paths.
+# 10. The dedicated cross-cluster JWT/OIDC auth mount (auth/jwt-vso, via
+#     VSO_JWT_AUTH_MOUNT) is referenced, not the same-cluster auth/kubernetes
+#     mount used by the Agent Injector/OTel demo paths, and no
+#     token_reviewer_jwt is written anywhere in the script.
 assert_contains \
-  "least-privilege section reads the dedicated VSO_AUTH_MOUNT role" \
-  "$VSO_DEMO_CONTENTS" 'auth/${VSO_AUTH_MOUNT}/role/${VSO_AUTH_ROLE}'
+  "least-privilege section reads the dedicated VSO_JWT_AUTH_MOUNT role" \
+  "$VSO_DEMO_CONTENTS" 'auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}'
+assert_contains \
+  "login proof writes through auth/\${VSO_JWT_AUTH_MOUNT}/login" \
+  "$VSO_DEMO_CONTENTS" 'vault write auth/${VSO_JWT_AUTH_MOUNT}/login'
+assert_contains \
+  "wrong-audience JWT proof is present" \
+  "$VSO_DEMO_CONTENTS" 'correctly rejected (wrong audience)'
+assert_contains \
+  "wrong-service-account JWT proof is present" \
+  "$VSO_DEMO_CONTENTS" 'correctly rejected (wrong service account)'
+
+no_reviewer_jwt_writes=$(grep -nE 'token_reviewer_jwt=' "$VSO_DEMO" || true)
+if [ -n "$no_reviewer_jwt_writes" ]; then
+  echo "FAIL: found a token_reviewer_jwt= write in vso-demo.sh:"
+  echo "$no_reviewer_jwt_writes" | sed 's/^/  /'
+  fail=$((fail + 1))
+else
+  echo "PASS: vso-demo.sh never writes token_reviewer_jwt="
+  pass=$((pass + 1))
+fi
+
+# 11. Raw JWT variables are never echoed directly (only Vault's own login
+#     response, which never contains the input JWT, is ever printed).
+raw_jwt_echoes=$(grep -nE 'echo.*\$(\{)?JWT(\})?[^=]' "$VSO_DEMO" || true)
+if [ -n "$raw_jwt_echoes" ]; then
+  echo "FAIL: found a raw \$JWT value possibly echoed in vso-demo.sh:"
+  echo "$raw_jwt_echoes" | sed 's/^/  /'
+  fail=$((fail + 1))
+else
+  echo "PASS: vso-demo.sh never echoes the raw \$JWT variable"
+  pass=$((pass + 1))
+fi
 
 echo ""
 echo "vso-demo.sh validation: $pass passed, $fail failed"

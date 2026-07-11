@@ -236,10 +236,11 @@ current-context`):
    `VAULT_CONTEXT` only.
 3. `scripts/setup-vso-cluster.sh` — install VSO and create the `vso-demo`
    namespace/service accounts in `VSO_CONTEXT` only.
-4. `scripts/configure-vso-kubernetes-auth.sh` — configure Vault's dedicated
-   `auth/kubernetes-vso` mount (in the Vault cluster) against the VSO
-   cluster's API server, so Vault can validate VSO-cluster service account
-   JWTs.
+4. `scripts/configure-vso-jwt-auth.sh` — configure Vault's dedicated
+   `auth/jwt-vso` JWT/OIDC auth mount (in the Vault cluster), trusting the
+   VSO cluster's JWKS endpoint and binding the exact issuer, audience, and
+   subject VSO's service account presents. No reviewer service account or
+   `token_reviewer_jwt` is created or stored anywhere in this default path.
 5. `scripts/apply-vso-demo.sh` — apply the VSO CRDs
    (`VaultConnection`/`VaultAuth`/`VaultStaticSecret`) and `vso-demo-app` in
    the VSO cluster.
@@ -289,8 +290,9 @@ are `Running`/`1/1` with the `VaultStaticSecret` reporting `Ready: True`.
 
 `make verify-two-cluster` is the strongest single signal: it fails fast and
 names the exact section (contexts, placement, network reachability, real
-`auth/kubernetes-vso` login, synced Secret value, or rotation) if anything is
-wrong.
+`auth/jwt-vso` JWT login — including proof that a wrong-audience or
+wrong-service-account JWT is correctly rejected — synced Secret value, or
+rotation) if anything is wrong.
 
 ### 5. Optional polish
 
@@ -315,7 +317,7 @@ make setup                # Full two-cluster bootstrap: clusters, Vault, VSO, cr
 make clusters              # Create/validate kind-vault-lab and kind-vso-lab only
 make setup-vault           # Install/configure Vault in VAULT_CONTEXT only
 make setup-vso             # Install VSO + vso-demo namespace/SAs in VSO_CONTEXT only
-make configure-vso-auth    # Configure auth/kubernetes-vso against the VSO cluster API server
+make configure-vso-auth    # Configure auth/jwt-vso (JWT/OIDC) trusting the VSO cluster's JWKS endpoint
 make vso-apply             # Apply VSO CRDs + vso-demo-app in VSO_CONTEXT
 make check-vault-connectivity  # Prove a VSO-cluster pod can reach Vault at VAULT_ADDR
 make verify-two-cluster    # Full end-to-end two-cluster proof (placement/network/auth/sync/rotation)
@@ -510,13 +512,33 @@ many downstream clusters). That requires:
 - Vault reachable from **outside** its own cluster, at a host-level address
   (`VAULT_ADDR`, default `http://host.containers.internal:8200`) rather than
   the in-cluster DNS name `vault.default.svc.cluster.local`.
-- A **separate** Vault Kubernetes auth mount, `auth/kubernetes-vso`, that
-  validates service account JWTs against the *VSO* cluster's API server
-  (`VSO_API_ADDR`, default `https://host.containers.internal:6444`) instead
-  of the Vault cluster's own API server. This is deliberately distinct from
-  the pre-existing `auth/kubernetes` mount used by the Agent Injector/OTel
-  demo, which only ever validates JWTs from the Vault cluster — mixing the
-  two would let a token minted in one cluster be replayed against the other.
+- A **separate** Vault auth mount, `auth/jwt-vso`, configured as a **JWT/OIDC**
+  auth method rather than Kubernetes auth. Vault validates the VSO cluster's
+  service account JWTs itself, cryptographically, using the VSO cluster's own
+  JSON Web Key Set (JWKS, reachable at `VSO_API_ADDR`, default
+  `https://host.containers.internal:6444/openid/v1/jwks`) — it never calls
+  back into the VSO cluster's API server to ask "is this token still valid?"
+  the way Kubernetes auth's TokenReview does. This is deliberately distinct
+  from the pre-existing `auth/kubernetes` mount used by the Agent
+  Injector/OTel demo, which validates JWTs from the Vault cluster only —
+  mixing the two would let a token minted in one cluster be replayed against
+  the other.
+
+> **Why JWT/OIDC instead of Kubernetes auth's TokenReview here?** Kubernetes
+> auth's cross-cluster form requires Vault to hold a standing credential (a
+> `token_reviewer_jwt`) for a service account in the *other* cluster, plus a
+> `system:auth-delegator` RBAC binding there, just so Vault can ask that
+> cluster's API server to confirm a token is still valid on every login. JWT
+> auth removes that dependency entirely: Vault fetches the VSO cluster's
+> public signing keys (JWKS) once, then verifies tokens locally by checking
+> the signature plus three claims — **issuer** (which cluster minted this
+> token), **audience** (was this token minted for Vault specifically), and
+> **subject** (exactly which service account). No reviewer credential is
+> minted, rotated, or stored in Vault for this default path. The older
+> `auth/kubernetes-vso` / TokenReview approach still exists in this repo
+> (`scripts/configure-vso-kubernetes-auth.sh`) purely as a side-by-side
+> comparison path — it is not the default and `make setup` never configures
+> it.
 
 ### What the VSO demo proves
 
@@ -527,17 +549,25 @@ many downstream clusters). That requires:
   `VaultConnection` → `VaultAuth` → `VaultStaticSecret`.
 - A pod in the VSO cluster can reach Vault at the documented external
   address (`VAULT_ADDR`) across the Podman host network.
-- VSO authenticates through the dedicated `auth/kubernetes-vso` mount, which
-  performs a real Kubernetes TokenReview against the VSO cluster's API
-  server (`VSO_API_ADDR`) — not the Vault cluster's.
+- VSO authenticates through the dedicated `auth/jwt-vso` **JWT/OIDC** mount,
+  which validates the VSO cluster service account's JWT cryptographically
+  against that cluster's own JWKS (`VSO_API_ADDR`) and strictly checks its
+  issuer, audience, and subject claims — no TokenReview call, and no
+  reviewer JWT stored in Vault.
+- **Negative-path proof**: `make verify-two-cluster` also mints a JWT with
+  the wrong audience and a JWT for the wrong service account and confirms
+  Vault **rejects** both — proving the claim binding is actually enforced,
+  not just present.
 - A Vault KV secret (`kv-v2/vault-demo/mysecret`) is materialized as a native
   Kubernetes `Secret` (`vso-demo/vso-demo-mysecret`) in the VSO cluster.
 - A plain pod consumes it through `envFrom` with **zero** Vault configuration
   (the pod is `1/1`, not `2/2`, and carries no `vault.hashicorp.com`
   annotations).
 - VSO authenticates with a least-privilege identity: the dedicated `vso-demo`
-  Kubernetes auth role bound only to the `vso-demo/vso-demo` service account
-  (in the VSO cluster), using the existing `mysecret` policy.
+  JWT/OIDC role bound only to issuer `bound_issuer`, audience
+  `bound_audiences=vault`, and subject
+  `bound_subject=system:serviceaccount:vso-demo:vso-demo` (in the VSO
+  cluster), using the existing `mysecret` policy.
 - **Live rotation**: changing the value in Vault (in the Vault cluster)
   refreshes the native Secret in the VSO cluster automatically (within
   `refreshAfter`, set to 30s).
@@ -553,60 +583,75 @@ many downstream clusters). That requires:
 | Coupling to Vault | Pod needs Vault annotations | App needs **zero** Vault knowledge |
 | Config mechanism | Pod annotations | Kubernetes CRDs |
 | Pod shape | `2/2` (app + Vault Agent) | `1/1` (app only) |
-| Kubernetes auth mount | `auth/kubernetes` (validates Vault-cluster JWTs) | `auth/kubernetes-vso` (validates VSO-cluster JWTs) |
+| Auth method | `auth/kubernetes` (validates Vault-cluster JWTs via TokenReview) | `auth/jwt-vso` (JWT/OIDC — validates VSO-cluster JWTs cryptographically via JWKS, no TokenReview) |
 
 ### VSO architecture (two clusters)
 
 ```text
-kind-vault-lab (VAULT_CONTEXT)                    kind-vso-lab (VSO_CONTEXT)
-┌───────────────────────────────────┐            ┌────────────────────────────────────────┐
-│ default/vault-0                   │            │ vault-secrets-operator-system           │
-│   auth/kubernetes-vso             │            │   VSO controller ── reconcile loop      │
-│     -> role vso-demo              │            │                                          │
-│     -> policy mysecret            │            │ vso-demo namespace                      │
-│   kv-v2/vault-demo/mysecret       │            │   VaultConnection ─► VaultAuth ─►        │
-│                                    │            │     VaultStaticSecret                   │
-│ NodePort/host port mapping:       │            │   ServiceAccounts: vso-demo,             │
-│   :8200 -> host.containers.internal│           │     vault-token-reviewer                 │
-└──────────────┬─────────────────────┘            └───────────────┬──────────────────────────┘
-               │ (1) VaultConnection points at                    │
-               │     VAULT_ADDR = http://host.containers.internal:8200
-               │◄──────────────────────────────────────────────────┘
-               │ (2) VaultAuth logs in: SA JWT for vso-demo/vso-demo
-               │     via auth/kubernetes-vso/login
-               ▼
-     Vault calls TokenReview against VSO_API_ADDR
-     (https://host.containers.internal:6444, the VSO cluster's API server,
-      reached via the vault-token-reviewer service account's JWT)
-               │ (3) on success: read kv-v2/vault-demo/mysecret
-               ▼
-     VSO writes/refreshes ──► Kubernetes Secret: vso-demo-mysecret (kind-vso-lab)
-                                            │
-                                            │ (4) envFrom (standard K8s)
-                                            ▼
-                            Plain app pod: vso-demo-app (no Vault config, kind-vso-lab)
+kind-vault-lab (VAULT_CONTEXT)              kind-vso-lab (VSO_CONTEXT)
+---------------------------------------     ---------------------------------------
+default/vault-0                             vault-secrets-operator-system
+  auth/jwt-vso (JWT/OIDC)                     VSO controller -- reconcile loop
+    -> role vso-demo
+    -> bound_audiences: vault                vso-demo namespace
+    -> bound_subject: vso-demo SA               VaultConnection -> VaultAuth ->
+    -> policy mysecret                            VaultStaticSecret
+  kv-v2/vault-demo/mysecret                    ServiceAccount: vso-demo
+
+NodePort/host port mapping:
+  :8200 -> host.containers.internal
+---------------------------------------     ---------------------------------------
+
+Step 1: VaultConnection points at VAULT_ADDR (http://host.containers.internal:8200)
+        [VSO cluster] ----------------------------------------> [Vault cluster]
+
+Step 2: VaultAuth logs in with the vso-demo pod's own SA JWT over auth/jwt-vso/login
+        [VSO cluster] ----------------------------------------> [Vault cluster]
+
+Step 3: Vault verifies the JWT locally: signature checked against the VSO
+        cluster's JWKS (VSO_API_ADDR), then issuer/audience/subject claims
+        checked against the role's strict bindings. No callback, no
+        TokenReview, no reviewer JWT.
+
+Step 4: On success, Vault returns a token scoped to the mysecret policy;
+        VSO reads kv-v2/vault-demo/mysecret and writes/refreshes the native
+        Kubernetes Secret vso-demo-mysecret every 30s.
+        [Vault cluster] ---------------------------------------> [VSO cluster]
+
+Step 5: The plain app pod vso-demo-app consumes the Secret via envFrom
+        (standard Kubernetes API, no Vault config).
 ```
 
 ### Resources created for the VSO demo
 
 `make setup` (via `scripts/setup-vault-cluster.sh`,
-`scripts/setup-vso-cluster.sh`, `scripts/configure-vso-kubernetes-auth.sh`,
-and `scripts/apply-vso-demo.sh`) provisions the VSO path across both
-clusters, additively and idempotently:
+`scripts/setup-vso-cluster.sh`, `scripts/configure-vso-jwt-auth.sh`, and
+`scripts/apply-vso-demo.sh`) provisions the VSO path across both clusters,
+additively and idempotently:
 
 | Resource | Cluster | Purpose |
 | --- | --- | --- |
 | Vault NodePort/host port mapping (`VAULT_ADDR`) | `kind-vault-lab` | Exposes Vault at `http://host.containers.internal:8200`, reachable from the VSO cluster. |
-| `auth/kubernetes-vso` mount | `kind-vault-lab` | Dedicated Kubernetes auth mount validated against the VSO cluster's API server, separate from `auth/kubernetes`. |
-| `auth/kubernetes-vso/role/vso-demo` | `kind-vault-lab` | Binds `vso-demo/vso-demo` (VSO cluster) to the `mysecret` policy. |
-| `vault-token-reviewer` service account + `system:auth-delegator` binding | `kind-vso-lab` | Identity Vault uses to call the VSO cluster's TokenReview API. |
+| `auth/jwt-vso` mount | `kind-vault-lab` | Dedicated JWT/OIDC auth mount that trusts the VSO cluster's JWKS, separate from `auth/kubernetes`. No reviewer service account or `token_reviewer_jwt` involved. |
+| `auth/jwt-vso/role/vso-demo` | `kind-vault-lab` | Strictly binds issuer, `bound_audiences=vault`, and `bound_subject=system:serviceaccount:vso-demo:vso-demo` (VSO cluster) to the `mysecret` policy. |
+| `oidc-discovery-reader` ClusterRole/ClusterRoleBinding | `kind-vso-lab` | Grants unauthenticated read of the VSO cluster's OIDC discovery document and JWKS endpoint, so Vault can fetch the public signing keys it needs to validate JWTs locally. |
 | `vault-secrets-operator` Helm release (chart `1.4.0`) | `kind-vso-lab` | Runs the operator in `vault-secrets-operator-system`. |
 | `vso-demo` namespace and service account | `kind-vso-lab` | Dedicated identity VSO authenticates as. |
 | `VaultConnection/vso-demo-connection` | `kind-vso-lab` | How VSO reaches Vault: the external `VAULT_ADDR`, not an in-cluster URL. |
-| `VaultAuth/vso-demo-auth` | `kind-vso-lab` | Uses mount `kubernetes-vso`, role `vso-demo`. |
+| `VaultAuth/vso-demo-auth` | `kind-vso-lab` | Uses `method: jwt`, mount `jwt-vso`, role `vso-demo`. |
 | `VaultStaticSecret/vso-demo-mysecret` | `kind-vso-lab` | Syncs `kv-v2/vault-demo/mysecret` → native Secret. |
 | `vso-demo/vso-demo-mysecret` Secret | `kind-vso-lab` | The materialized native Kubernetes Secret. |
 | `vso-demo/vso-demo-app` pod | `kind-vso-lab` | Plain consumer using `envFrom` (no Vault config). |
+
+> **Legacy comparison path (not installed by default):** this repo also
+> keeps `scripts/configure-vso-kubernetes-auth.sh`, which configures the
+> older `auth/kubernetes-vso` Kubernetes-auth/TokenReview mount plus a
+> `vault-token-reviewer` service account and `system:auth-delegator`
+> binding. `make setup` never runs it, and no Make target wires it in by
+> default — it exists only so you can run it by hand
+> (`bash scripts/configure-vso-kubernetes-auth.sh`, after
+> `ENABLE_TOKEN_REVIEWER_AUTH=1 scripts/setup-vso-cluster.sh`) to show the
+> two approaches side by side.
 
 ### Key VSO manifests
 
@@ -622,7 +667,9 @@ spec:
   address: http://host.containers.internal:8200
 ```
 
-`VaultAuth` uses the dedicated `kubernetes-vso` mount:
+`VaultAuth` uses the dedicated `jwt-vso` JWT/OIDC mount — the pod's own
+service account JWT is presented directly to Vault, and there is no
+`token_reviewer_jwt` field anywhere in this manifest:
 
 ```yaml
 apiVersion: secrets.hashicorp.com/v1beta1
@@ -632,11 +679,14 @@ metadata:
   namespace: vso-demo
 spec:
   vaultConnectionRef: vso-demo-connection
-  method: kubernetes
-  mount: kubernetes-vso
-  kubernetes:
+  method: jwt
+  mount: jwt-vso
+  jwt:
     role: vso-demo
     serviceAccount: vso-demo
+    audiences:
+      - vault
+    tokenExpirationSeconds: 600
 ```
 
 `VaultStaticSecret` ties it all together:
@@ -798,14 +848,20 @@ kubectl --context kind-vso-lab logs -n vault-secrets-operator-system -l app.kube
 
 Common causes:
 
-- The `vso-demo` role under `auth/kubernetes-vso` (in the **Vault** cluster,
-  not `auth/kubernetes`) is missing or not bound to the `vso-demo/vso-demo`
-  service account (in the **VSO** cluster). Confirm with:
+- The `vso-demo` role under `auth/jwt-vso` (in the **Vault** cluster, not
+  `auth/kubernetes`) is missing, or its `bound_audiences`/`bound_subject`
+  claim binding does not exactly match the JWT the `vso-demo/vso-demo`
+  service account (in the **VSO** cluster) presents. Confirm with:
 
   ```sh
-  kubectl --context kind-vault-lab exec vault-0 -- vault read auth/kubernetes-vso/role/vso-demo
+  kubectl --context kind-vault-lab exec vault-0 -- vault read auth/jwt-vso/role/vso-demo
   ```
 
+- Vault cannot fetch the VSO cluster's JWKS — check that the
+  `oidc-discovery-reader` ClusterRole/ClusterRoleBinding still exists in the
+  VSO cluster (`kubectl --context kind-vso-lab get clusterrolebinding
+  oidc-discovery-reader-binding`) and that `auth/jwt-vso/config`'s
+  `jwks_url`/`bound_issuer` still match `VSO_OIDC_JWKS_URL`/`VSO_OIDC_ISSUER`.
 - The `mysecret` policy does not grant read on
   `kv-v2/data/vault-demo/mysecret`.
 - The `VaultConnection` still points at an in-cluster URL
@@ -861,21 +917,41 @@ runs a throwaway pod in the VSO cluster that curls `VAULT_ADDR`
   `host.docker.internal` — override `TWO_CLUSTER_HOST` accordingly rather
   than editing scripts.
 
-### Vault login through `auth/kubernetes-vso` fails with an expired/invalid reviewer token
+### JWT/OIDC login through `auth/jwt-vso` fails
 
-`scripts/configure-vso-kubernetes-auth.sh` mints the `token_reviewer_jwt`
-used by `auth/kubernetes-vso/config` via `kubectl create token` (demo-only
-limitation: this JWT is **not** auto-refreshed by Kubernetes or Vault; see
-the comments at the top of that script). Default TTL is `8760h` (1 year),
-but if you've overridden `VSO_REVIEWER_TOKEN_TTL` to something shorter, or
-enough time has passed:
+`auth/jwt-vso` validates the VSO cluster service account's JWT itself
+(signature against the VSO cluster's JWKS, then issuer/audience/subject
+claims) — there is no reviewer token to expire, because none is stored. If
+login fails, it's almost always one of:
+
+- **Wrong audience.** VSO's `VaultAuth` must request the `vault` audience
+  (`spec.jwt.audiences: [vault]`) to match the role's `bound_audiences`.
+- **Wrong subject.** The role's `bound_subject` is pinned to
+  `system:serviceaccount:vso-demo:vso-demo`; a JWT from any other namespace
+  or service account is rejected by design (see `make verify-two-cluster`,
+  which proves this by deliberately minting and rejecting both).
+- **JWKS unreachable.** Vault fetches the VSO cluster's public signing keys
+  from `jwks_url` (`VSO_OIDC_JWKS_URL`, default
+  `https://host.containers.internal:6444/openid/v1/jwks`). If that endpoint
+  is unreachable or returns `403`, confirm the `oidc-discovery-reader`
+  ClusterRole/ClusterRoleBinding still exists in the VSO cluster.
+
+Re-run the configuration at any time — it's safe and idempotent:
 
 ```sh
-make configure-vso-auth   # re-mints a fresh reviewer JWT and rewrites auth/kubernetes-vso/config
+make configure-vso-auth   # re-applies auth/jwt-vso/config and auth/jwt-vso/role/vso-demo
 ```
 
-This is safe to re-run at any time; it does not disturb any other Vault
-configuration (including the pre-existing `auth/kubernetes` mount).
+This does not disturb any other Vault configuration (including the
+pre-existing `auth/kubernetes` mount).
+
+> **Using the legacy `auth/kubernetes-vso` comparison path instead?** That
+> path (`scripts/configure-vso-kubernetes-auth.sh`, not run by default) does
+> mint a demo-only `token_reviewer_jwt` via `kubectl create token` for the
+> `vault-token-reviewer` service account, with a default TTL of `8760h` (1
+> year). If you've explicitly opted into that path and it later fails with
+> an expired/invalid reviewer token, re-mint it with
+> `bash scripts/configure-vso-kubernetes-auth.sh`.
 
 ### VSO reconciliation failures / CrashLoopBackOff in the VSO cluster
 
@@ -885,10 +961,13 @@ kubectl --context kind-vso-lab describe pod -n vault-secrets-operator-system -l 
 kubectl --context kind-vso-lab logs -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator --tail=200
 ```
 
-Look for TokenReview/RBAC errors (missing `vault-token-reviewer`
-`system:auth-delegator` binding — re-run `make setup-vso`), Vault connection
-timeouts (see the Podman networking section above), or `403`s from Vault
-(see the reviewer-token section above).
+Look for JWT/OIDC errors (invalid audience/subject claim, or a JWKS fetch
+failure — see the section above), Vault connection timeouts (see the Podman
+networking section above), or `403`s from Vault (policy/role mismatch, see
+above). If you're deliberately using the legacy `auth/kubernetes-vso`
+comparison path, also check for TokenReview/RBAC errors (missing
+`vault-token-reviewer`/`system:auth-delegator` binding — re-run
+`ENABLE_TOKEN_REVIEWER_AUTH=1 scripts/setup-vso-cluster.sh`).
 
 ### Resource pressure from running two clusters
 

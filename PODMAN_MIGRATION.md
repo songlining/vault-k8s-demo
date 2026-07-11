@@ -26,9 +26,11 @@ unaffected and continues to run entirely inside `kind-vault-lab`.
 
 The two-cluster VSO topology adds one real requirement beyond a single
 Podman-backed cluster: **cross-cluster networking**. Vault must be reachable
-from pods running in the *other* cluster, and Vault must be able to reach the
-other cluster's API server to validate service account tokens. Both use the
-Podman host gateway address `host.containers.internal` (see
+from pods running in the *other* cluster, and Vault must be able to fetch
+that cluster's public JSON Web Key Set (JWKS) so it can validate service
+account tokens cryptographically, without ever calling back into that
+cluster's API server. Both use the Podman host gateway address
+`host.containers.internal` (see
 [Host Networking for the Two-Cluster VSO Demo](#host-networking-for-the-two-cluster-vso-demo)
 below) rather than in-cluster DNS names, which only resolve inside their own
 cluster.
@@ -109,7 +111,7 @@ its own Make target if you want to re-run a single stage:
 scripts/create-clusters.sh              # make clusters
 scripts/setup-vault-cluster.sh          # make setup-vault
 scripts/setup-vso-cluster.sh            # make setup-vso
-scripts/configure-vso-kubernetes-auth.sh  # make configure-vso-auth
+scripts/configure-vso-jwt-auth.sh       # make configure-vso-auth (auth/jwt-vso, JWT/OIDC)
 scripts/apply-vso-demo.sh               # make vso-apply
 ```
 
@@ -135,12 +137,15 @@ host network. Two things use it:
    (`http://host.containers.internal:8200` by default) rather than the
    in-cluster name `vault.default.svc.cluster.local`, which only resolves
    inside `kind-vault-lab`.
-2. **Vault → VSO's API server**: Vault's dedicated `auth/kubernetes-vso`
-   mount validates VSO-cluster service account JWTs by calling the VSO
-   cluster's Kubernetes TokenReview API. That API server is similarly mapped
-   to a host port (`VSO_API_HOST_PORT`, default `6444`), and Vault is
-   configured with `kubernetes_host=VSO_API_ADDR`
-   (`https://host.containers.internal:6444` by default).
+2. **Vault → VSO cluster's JWKS**: Vault's dedicated `auth/jwt-vso` JWT/OIDC
+   mount validates VSO-cluster service account JWTs itself, cryptographically,
+   by fetching that cluster's public signing keys (JWKS) once and checking the
+   token's issuer/audience/subject claims locally — it never calls back into
+   the VSO cluster's API server the way Kubernetes auth's TokenReview does,
+   and Vault never stores a reviewer credential for the VSO cluster. That
+   JWKS endpoint is similarly mapped to a host port (`VSO_API_HOST_PORT`,
+   default `6444`), and Vault is configured with `jwks_url=VSO_OIDC_JWKS_URL`
+   (`https://host.containers.internal:6444/openid/v1/jwks` by default).
 
 All of these defaults live in `scripts/lib/two-cluster-env.sh` and can be
 overridden via environment variables (`TWO_CLUSTER_HOST`, `VAULT_HOST_PORT`,
@@ -194,14 +199,29 @@ kind load docker-image nginx:latest --name vso-lab
 - Confirm the host port mappings are actually bound:
   `podman machine ssh -- sudo ss -ltnp | grep -E '8200|6444'`.
 
-### Reviewer JWT for `auth/kubernetes-vso` expires
+### JWT/OIDC login through `auth/jwt-vso` fails
 
-`scripts/configure-vso-kubernetes-auth.sh` mints a demo-only, time-bounded
-JWT (`kubectl create token`) for the `vault-token-reviewer` service account
-and writes it into `auth/kubernetes-vso/config`. It is **not**
-auto-refreshed. Re-run `make configure-vso-auth` periodically (well before
-the configured TTL, default `8760h`) to mint a fresh one -- it is safe to
-re-run at any time and does not disturb any other Vault configuration.
+`scripts/configure-vso-jwt-auth.sh` configures `auth/jwt-vso` to trust the
+VSO cluster's JWKS and strictly bind issuer, audience, and subject claims --
+no reviewer service account, and no `token_reviewer_jwt`, is ever created or
+stored. If login fails, re-check that the `oidc-discovery-reader`
+ClusterRole/ClusterRoleBinding still exists in the VSO cluster (Vault needs
+it to fetch the JWKS), and that the role's `bound_audiences`/`bound_subject`
+still match what `VaultAuth` presents. Re-running the configuration is safe
+and idempotent at any time:
+
+```bash
+make configure-vso-auth   # re-applies auth/jwt-vso/config and auth/jwt-vso/role/vso-demo
+```
+
+> **Legacy comparison path:** `scripts/configure-vso-kubernetes-auth.sh`
+> (not run by `make setup`) instead mints a demo-only, time-bounded JWT via
+> `kubectl create token` for a `vault-token-reviewer` service account and
+> writes it into `auth/kubernetes-vso/config`. That JWT is **not**
+> auto-refreshed; if you've deliberately opted into this path
+> (`ENABLE_TOKEN_REVIEWER_AUTH=1 scripts/setup-vso-cluster.sh` then
+> `bash scripts/configure-vso-kubernetes-auth.sh`), re-run it periodically
+> (well before the default `8760h` TTL) to mint a fresh one.
 
 ### VSO in `kind-vso-lab` fails to reconcile
 
@@ -210,10 +230,12 @@ kubectl --context kind-vso-lab logs -n vault-secrets-operator-system \
   -l app.kubernetes.io/name=vault-secrets-operator --tail=200
 ```
 
-Look for TokenReview/RBAC errors (missing `vault-token-reviewer`
-`system:auth-delegator` binding, re-run `make setup-vso`), connection
-timeouts to `VAULT_ADDR` (see the networking section above), or `403`s from
-Vault (expired reviewer JWT or a policy/role mismatch, see above).
+Look for JWT/OIDC errors (invalid audience/subject claim, or a JWKS fetch
+failure -- see the section above), connection timeouts to `VAULT_ADDR` (see
+the networking section above), or `403`s from Vault (policy/role mismatch,
+see above). If you're deliberately using the legacy `auth/kubernetes-vso`
+comparison path, also look for TokenReview/RBAC errors (missing
+`vault-token-reviewer`/`system:auth-delegator` binding).
 
 ## Compatibility
 
@@ -245,5 +267,6 @@ podman machine stop
       clusters (`kind-vault-lab`, `kind-vso-lab`)
 - [x] Verify cross-cluster networking via `host.containers.internal`
       (`make check-vault-connectivity`)
-- [x] Verify cross-cluster Kubernetes auth via `auth/kubernetes-vso`
+- [x] Verify cross-cluster JWT/OIDC auth via `auth/jwt-vso`, including
+      wrong-audience and wrong-service-account JWTs being correctly rejected
       (`make verify-two-cluster`)

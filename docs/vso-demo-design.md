@@ -1,22 +1,45 @@
 # Design: Vault Secrets Operator (VSO) Demo
 
-**Status:** Draft for review (superseded on cluster topology, see note below)
+**Status:** Draft for review (superseded on cluster topology and auth method — see notes below)
 **Author:** Larry Song
 **Date:** 2026-05-30
 **Target:** `make vso-demo`
 
-> **Superseded note:** This document originally designed the VSO demo as a
-> **single-cluster** scenario reusing the existing `auth/kubernetes` mount
-> (see "Auth method: Reuse `auth/kubernetes`" below). The implemented demo
-> now runs Vault and VSO in **two separate Podman-backed kind clusters**
-> (`kind-vault-lab` and `kind-vso-lab`) with a dedicated
-> `auth/kubernetes-vso` mount validated against the VSO cluster's API
-> server. The rest of this document (CRD choice, rotation story, goals,
-> non-goals, walkthrough narrative) remains accurate. For the current
-> cluster topology and cross-cluster networking/auth design, see
-> [`vso-two-cluster-podman-plan.md`](./vso-two-cluster-podman-plan.md) and
-> [`vso-two-cluster-audit.md`](./vso-two-cluster-audit.md), and for
-> user-facing instructions see the top-level [`README.md`](../README.md).
+> **Superseded note (cluster topology + auth method):** This document
+> originally designed the VSO demo as a **single-cluster** scenario reusing
+> the existing same-cluster `auth/kubernetes` mount (see "Auth method: Reuse
+> `auth/kubernetes`" below). The **implemented** demo now runs Vault and VSO
+> in **two separate Podman-backed kind clusters** (`kind-vault-lab` and
+> `kind-vso-lab`) and authenticates VSO through a dedicated **JWT/OIDC**
+> auth mount — `auth/jwt-vso` — that validates the VSO cluster's service
+> account JWTs **cryptographically** against that cluster's own JWKS
+> endpoint, with strict issuer/audience/subject claim binding and **no
+> `token_reviewer_jwt` stored in Vault**. The older `auth/kubernetes-vso` /
+> TokenReview approach described in the two-cluster plan
+> ([`vso-two-cluster-podman-plan.md`](./vso-two-cluster-podman-plan.md))
+> has been superseded by JWT/OIDC as the default production-oriented path;
+> see [`vso-jwt-oidc-auth-plan.md`](./vso-jwt-oidc-auth-plan.md) for the
+> full JWT/OIDC migration rationale and design.
+>
+> The rest of this document (CRD choice, rotation story, goals, non-goals,
+> walkthrough narrative) remains accurate. For the current cluster topology,
+> cross-cluster networking, and JWT/OIDC auth design, see
+> [`vso-two-cluster-podman-plan.md`](./vso-two-cluster-podman-plan.md)
+> (two-cluster topology) and [`vso-jwt-oidc-auth-plan.md`](./vso-jwt-oidc-auth-plan.md)
+> (JWT/OIDC auth), and for user-facing instructions see the top-level
+> [`README.md`](../README.md).
+>
+> **What is accurate vs. stale in this document:** the CRD pipeline
+> (`VaultConnection` → `VaultAuth` → `VaultStaticSecret`), the rotation
+> story, the app pod consumption model, and the Agent Injector vs VSO
+> contrast table are all still accurate. The auth method details below —
+> `method: kubernetes`, `mount: kubernetes`, `auth/kubernetes/role/vso-demo`,
+> and the in-cluster `vault.default.svc.cluster.local` VaultConnection address
+> — are **stale** and have been replaced by `method: jwt`, `mount: jwt-vso`,
+> `auth/jwt-vso/role/vso-demo`, and the external `VAULT_ADDR`
+> (`http://host.containers.internal:8200`) respectively. Read the auth and
+> networking sections below as the *original* design, not the current
+> implementation.
 
 ---
 
