@@ -1,0 +1,17 @@
+execution:
+  # Force-kill any task after 20 minutes of wall-clock execution. Default is 0
+  # (no timeout, inherit Pi's defaults), which is how a hung `presenterm`
+  # invocation (no PTY) blocked a task for 13h58m and then 1h48m on 2026-07-10/11
+  # -- ralpi never noticed because nothing was timing the task out.
+  timeoutMs: 1200000 # 20m
+
+prompts:
+  projectContext: |
+    NEVER invoke `presenterm` directly, via bare `script -q ...`, or with
+    `--export-html` / `-x -E` from a non-interactive shell/bash tool call.
+    presenterm requires a real PTY; without one it hangs indefinitely instead
+    of failing fast, which can stall a task (and this whole ralpi loop) for
+    hours. Always use the tmux-backed validator described in
+    ~/work/hashicorp/local_skills/presenterm-demo-decks/SKILL.md
+    (scripts/validate-deck-visual.sh), which allocates a real PTY via a
+    private tmux socket and includes scoped process cleanup.

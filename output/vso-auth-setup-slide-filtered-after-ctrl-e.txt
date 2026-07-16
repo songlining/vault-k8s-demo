@@ -1,0 +1,39 @@
+
+                                                                                                      6 — Set up cross-cluster Kubernetes auth
+
+                    This is the customer-facing setup step: configure a Vault auth method in the Vault cluster that validates service account JWTs against the VSO cluster's API server.
+
+                                       set -euo pipefail
+                                       cd "$(git rev-parse --show-toplevel)"
+                                       bash scripts/configure-vso-kubernetes-auth.sh > /tmp/vso-auth-setup.out 2>&1
+                                       grep -E '^(==> Configuring|    Vault cluster|    VSO cluster|    Auth mount|==> Reading|    VSO API address|==> Minting|==> Enabling|    auth/kubernetes-vso
+                                       already|==> Writing auth/kubernetes-vso/(config|role)|auth/kubernetes-vso is configured|cluster.s API server|service account|Reviewer JWT expires)'
+                                       /tmp/vso-auth-setup.out
+
+                    ———————————————————————————————————————————————————————————————————————————————————————————————— [finished] ————————————————————————————————————————————————————————————————————————————————————————————————
+
+                                       ==> Configuring Vault Kubernetes auth against the VSO cluster
+                                           Vault cluster (auth host): kind-vault-lab
+                                           VSO cluster (validated):   kind-vso-lab
+                                           Auth mount:                auth/kubernetes-vso
+                                       ==> Reading API server CA for context 'kind-vso-lab'...
+                                           VSO API address: https://host.containers.internal:6444
+                                       ==> Minting reviewer JWT for service account 'vault-token-reviewer' (ttl 8760h)...
+                                       ==> Enabling auth/kubernetes-vso in context 'kind-vault-lab' (if not already enabled)...
+                                           auth/kubernetes-vso already enabled. Skipping enable (config below is still refreshed).
+                                       ==> Writing auth/kubernetes-vso/config...
+                                       ==> Writing auth/kubernetes-vso/role/vso-demo...
+                                       auth/kubernetes-vso is configured in context 'kind-vault-lab' against the VSO
+                                       cluster's API server (https://host.containers.internal:6444), and role 'vso-demo' is bound to
+                                       service account 'vso-demo/vso-demo' with policy 'mysecret'.
+                                       Reviewer JWT expires in 8760h (demo-only; not auto-refreshed).
+
+                    What that command does
+
+                       •  Reads the VSO cluster API server CA from kubeconfig.
+                       •  Mints a reviewer JWT for vso-demo/vault-token-reviewer in the VSO cluster.
+                       •  Enables/refreshes auth/kubernetes-vso in Vault without touching same-cluster auth/kubernetes.
+                       •  Writes auth/kubernetes-vso/config with the VSO API endpoint.
+                       •  Writes role vso-demo, bound only to service account vso-demo/vso-demo.
+
+                                                                                                                                                                                                                                            10 / 16

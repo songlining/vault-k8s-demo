@@ -1,26 +1,23 @@
 {
   "taskId": "08",
-  "title": "apply-vso-crds-and-consuming-app",
-  "summary": "Created `scripts/apply-vso-demo.sh`, an idempotent, context-explicit script that seeds the Vault baseline secret, applies `VaultConnection`/`VaultAuth`/`VaultStaticSecret` and recreates the plain `vso-demo-app` pod entirely within the VSO cluster, then waits for the native Secret and pod to be ready; validated with a 19-case unit test suite and live end-to-end against real Podman-backed `kind-vault-lab`/`kind-vso-lab` clusters, including secret rotation and idempotent re-run.",
+  "title": "update-two-cluster-verification",
+  "summary": "Updated `scripts/verify-two-cluster.sh`'s auth section to authenticate via `auth/jwt-vso` (JWT/OIDC) with a positive `vso-demo`/audience-`vault` login, mandatory wrong-audience and wrong-service-account negative logins, and a strict claim-binding role review, plus an updated final summary; updated its static test suite to match, and verified everything live end-to-end.",
   "keyLearnings": [
-    "- `VaultConnection.spec.address` is set to `${VAULT_ADDR}` (`http://host.containers.internal:8200`) from `scripts/lib/two-cluster-env.sh`; `VaultAuth.spec.mount`/`role` use `${VSO_AUTH_MOUNT}`/`${VSO_AUTH_ROLE}` (`kubernetes-vso`/`vso-demo`) rather than hardcoding, so any future env override flows through automatically.",
-    "- The consuming app pod is fully recreated (delete --ignore-not-found --wait=true, then apply) each run rather than just re-applied, matching the pattern used for `vault-demo` in `scripts/setup-vault-cluster.sh` — this guarantees `envFrom` always captures a fresh Secret value at pod start and makes re-running the script safe/idempotent for demo purposes.",
-    "- The script preflights that the `vso-demo` service account already exists in `VSO_NAMESPACE` (created by `scripts/setup-vso-cluster.sh`) and that a Vault pod exists in `VAULT_CONTEXT`/`NAMESPACE` (created by `scripts/setup-vault-cluster.sh`) before doing any real work, with actionable error messages pointing at the prerequisite scripts.",
-    "- Live-verified against real clusters: CRDs (`vaultconnection`/`vaultauth`/`vaultstaticsecret`) show `HEALTHY=True`/`READY=True`/`SYNCED=True`; `vso-demo-mysecret` native Secret and `vso-demo-app` env both decode to `larry`; zero `vault.hashicorp.com` annotations on the app pod; rotating the value in the Vault cluster (`kv-v2/vault-demo/mysecret` → `larry-rotated-1`) synced into the VSO cluster's native Secret within ~9s (well under the 30s `refreshAfter`); no `vaultconnection` CRD/resource type exists in the Vault cluster (confirms VSO CRDs are VSO-cluster-only by construction, since VSO's CRDs aren't even installed there).",
-    "- Test suite mirrors the conventions from tasks 06/07 (`--check-only`, context/command preflight failures, bare-`kubectl`-wrapper regression guard) plus new manifest-content assertions (external address, dedicated mount, single-container/no-annotations app pod) — all 58 tests across the 6 script test files in `scripts/tests/` currently pass."
+    "- Negative-login pattern under `set -euo pipefail`: `if kubectl_vault exec ... vault write ... jwt=\"${WRONG_JWT}\" >/dev/null 2>&1; then fail_section ...; fi` — commands used as an `if` condition are exempt from `set -e`, so this correctly treats \"login unexpectedly succeeded\" as the failure branch without needing `|| true` tricks.",
+    "- Role/config strict-binding check reads `auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}` via `vault read -format=json | jq` and compares `bound_audiences`/`bound_subject` exactly against `${VSO_JWT_AUDIENCE}` and `system:serviceaccount:${VSO_NAMESPACE}:vso-demo` — proves the config, not just that a role exists.",
+    "- All minted JWT shell variables (`VSO_SA_JWT`, `WRONG_AUD_JWT`, `WRONG_SA_JWT`) are `unset` right after use and never echoed directly, per the \"don't log full JWT values\" requirement; only Vault's own login response is ever printed on failure.",
+    "- Task 07 (Makefile switch to `configure-vso-jwt-auth.sh` as default) had already landed in the working tree by the time this task ran even though it wasn't in this task's dependency list — worth checking `git log` before assuming a stale baseline in multi-task pipelines.",
+    "- Live-verified against the real two-cluster kind lab: both `bash scripts/verify-two-cluster.sh` and `make verify-two-cluster` pass all 7 sections including both negative auth checks; baseline secret (`larry`) confirmed restored after rotation. All 12 `scripts/tests/test-*.sh` suites (35 assertions in this one) pass with zero regressions."
   ],
   "filesChanged": [
-    "scripts/apply-vso-demo.sh (created)",
-    "scripts/tests/test-apply-vso-demo-validation.sh (created)",
-    "tasks/vso-two-cluster-podman/README.md (modified: marked task 08 done)"
+    "scripts/verify-two-cluster.sh",
+    "scripts/tests/test-verify-two-cluster-validation.sh",
+    "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
   ],
   "blockers": [
-    "none — script is complete",
-    "idempotent",
-    "and validated live end-to-end (apply",
-    "rotation",
-    "reset",
-    "re-run)."
+    "none — all acceptance/validation criteria for task 08 met (bash -n; static assertions for `auth/jwt-vso/login`",
+    "wrong-audience/wrong-SA negative paths",
+    "no JWT leakage; live e2e run with all auth/sync/rotation sections passing and baseline restored)."
   ],
-  "timestamp": "2026-07-10T04:34:04.449Z"
+  "timestamp": "2026-07-10T09:38:02.200Z"
 }

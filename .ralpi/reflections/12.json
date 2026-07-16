@@ -1,0 +1,23 @@
+{
+  "taskId": "12",
+  "title": "update-documentation-and-slides",
+  "summary": "Rewrote README.md, PODMAN_MIGRATION.md, and presenterm/vso.md to describe the final two-cluster Podman-backed VSO architecture (kind-vault-lab/kind-vso-lab, auth/kubernetes-vso, host.containers.internal, all `make` targets including `verify-two-cluster`), added a superseded-topology note to docs/vso-demo-design.md, and marked task 12 done; validated everything against a live `make verify-two-cluster` run.",
+  "keyLearnings": [
+    "- README's single-cluster Agent Injector/OTel demo (`make demo`/`make verify`/`make status`) is intentionally untouched/still single-cluster — only the VSO-related sections needed the two-cluster rewrite; kept clear labeling (\"single-cluster Agent Injector/OTel demo\") everywhere to avoid confusing the two demo paths.",
+    "- Verified every `make <target>` referenced in the three docs against `make help`/Makefile — no stale/invented target names remain (a grep-based check caught one false positive, \"make sure\", which was just prose).",
+    "- `docs/vso-demo-design.md` was the original single-cluster VSO design doc; rather than rewriting its whole narrative (goals/CRD choice/rotation story are still valid), added a \"Superseded note\" at the top pointing to `docs/vso-two-cluster-podman-plan.md` / `vso-two-cluster-audit.md` (which were already accurate and needed no changes) and the README.",
+    "- presenterm/vso.md slides now explicitly show `kind-vault-lab` vs `kind-vso-lab` boxes, the `auth/kubernetes-vso` → VSO_API_ADDR TokenReview path, and every `+exec` kubectl command now uses `--context kind-vault-lab`/`--context kind-vso-lab` explicitly instead of relying on current-context.",
+    "- Live-validated the full doc rewrite by running `bash scripts/verify-two-cluster.sh --check-only` and then a full `make verify-two-cluster` against the real running two-cluster environment — all 7 sections passed (placement, network via host.containers.internal, real auth/kubernetes-vso login, secret sync, and rotation/reset), confirming the documentation matches actual working commands."
+  ],
+  "filesChanged": [
+    "README.md",
+    "PODMAN_MIGRATION.md",
+    "presenterm/vso.md",
+    "docs/vso-demo-design.md",
+    "tasks/vso-two-cluster-podman/README.md"
+  ],
+  "blockers": [
+    "none — feature vso-two-cluster-podman is now fully complete (all 12 tasks done); `make verify-two-cluster` is green."
+  ],
+  "timestamp": "2026-07-10T04:58:35.484Z"
+}

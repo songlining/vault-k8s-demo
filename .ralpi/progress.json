@@ -1,14 +1,523 @@
 {
   "sourcePath": "/Users/larry.song/work/hashicorp/vault-k8s-demo/tasks/vso-jwt-oidc-auth/README.md",
   "tasks": {
-    "01": {
-      "status": "in_progress",
+    "10": {
+      "status": "completed",
       "retries": 0,
-      "startedAt": "2026-07-10T09:00:10.604Z"
+      "startedAt": "2026-07-11T00:09:13.178Z",
+      "completedAt": "2026-07-11T00:14:54.304Z",
+      "durationMs": 280936,
+      "reflection": {
+        "taskId": "10",
+        "title": "update-demo-scripts-docs-and-deck",
+        "summary": "Verified, live-tested, and committed the already-drafted JWT/OIDC rewrite of README.md, PODMAN_MIGRATION.md, three docs/ design/audit files, presenterm/vso.md, and vso-demo.sh, plus two new static test suites guarding against stale TokenReview-as-default language and deck structural regressions.",
+        "keyLearnings": [
+          "- All task-10 deliverables were already fully drafted (uncommitted) in the working tree when this run started, from a prior interrupted attempt — verification-first approach (read everything, run all tests, live-verify) was correct rather than re-authoring from scratch.",
+          "- Doc taxonomy established: \"customer-facing\" docs (README.md, PODMAN_MIGRATION.md, vso-demo.sh, presenterm/vso.md) must present JWT/OIDC as default with legacy TokenReview mentions only in explicitly-framed comparison context; \"historical/internal\" docs (the 3 docs/vso-*.md design/audit files) may keep old narrative in-body but need a prominent \"Superseded on auth method\" callout near the top linking to vso-jwt-oidc-auth-plan.md.",
+          "- The unrelated top-level Agent Injector/OTel README section legitimately still uses TokenReview as its own actual (non-VSO) auth method — this is correctly exempted by the doc test's heuristic (only flags TokenReview lines that also mention vso/jwt-vso/jwt-oidc).",
+          "- New test files are strictly static (bash -n, grep/awk checks) and never invoke presenterm, per the hard PTY-hang guardrail; test-vso-deck-validation.sh only does `command -v presenterm` for an informational version string.",
+          "- Live end-to-end proof against the real two-cluster kind lab: `make verify-two-cluster` (7/7 sections) and a full non-interactive `vso-demo.sh` run both pass, including wrong-audience and wrong-service-account JWT rejection and rotation-then-restore-to-`larry`; re-verified cleanliness after the demo run.",
+          "- Live presenterm Ctrl-E validation of `make vso-deck` is explicitly out of scope for task 10 and deferred to task 11's tmux-backed validator."
+        ],
+        "filesChanged": [
+          "README.md",
+          "PODMAN_MIGRATION.md",
+          "docs/vso-demo-design.md",
+          "docs/vso-two-cluster-audit.md",
+          "docs/vso-two-cluster-podman-plan.md",
+          "presenterm/vso.md",
+          "vso-demo.sh",
+          "scripts/tests/test-vso-demo-validation.sh",
+          "scripts/tests/test-vso-docs-validation.sh (new)",
+          "scripts/tests/test-vso-deck-validation.sh (new)"
+        ],
+        "blockers": [
+          "none — all task 10 acceptance/validation criteria met; 15/15 scripts/tests/test-*.sh suites pass; live two-cluster verification green before and after the demo run."
+        ],
+        "timestamp": "2026-07-11T00:13:54.204Z"
+      },
+      "toolUsage": {
+        "read": 2,
+        "write": 0,
+        "edit": 0,
+        "bash": 29,
+        "other": 0
+      },
+      "outputPreview": "Task 10 is complete. Summary of what was verified/done:\n\n- Found that all deliverables (README.md, PODMAN_MIGRATION.md, docs/vso-demo-design.md, docs/vso-two-cluster-audit.md, docs/vso-two-cluster-podman-plan.md, presenterm/vso.md, vso-demo.sh, and two new test files) were already present as uncommitted edits from a prior interrupted run.\n- Reviewed all content in depth for correctness and completeness against the acceptance criteria (JWT/OIDC as default, `auth/jwt-vso` references, no `token_rev\n... (truncated)",
+      "commitMessages": [
+        "docs(vso):",
+        "test(vso-jwt-oidc-auth):",
+        "feat(verify-two-cluster):",
+        "feat:",
+        "refactor(vso-cluster):"
+      ],
+      "commitSummary": "docs(vso):; test(vso-jwt-oidc-auth):; feat(verify-two-cluster): (+2 more)"
+    },
+    "11": {
+      "status": "failed",
+      "retries": 1,
+      "startedAt": "2026-07-11T00:35:26.591Z",
+      "error": "Task timed out after 20m 0s"
+    },
+    "01": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:00:10.604Z",
+      "completedAt": "2026-07-10T09:06:47.967Z",
+      "durationMs": 320703,
+      "reflection": {
+        "taskId": "01",
+        "title": "spike-oidc-discovery-and-jwks",
+        "summary": "Spiked VSO cluster JWT issuer/JWKS discovery against the live two-cluster kind lab, proved reachability from the Vault cluster, and documented the decision to use `jwks_url` (not `oidc_discovery_url`) for `auth/jwt-vso`, plus a required RBAC fix for anonymous discovery/JWKS access.",
+        "keyLearnings": [
+          "- Default kind `iss` claim (`https://kubernetes.default.svc.cluster.local`) is cluster-internal and unsafe/unreachable cross-cluster (it resolves to the *wrong* cluster's own API server from the other kind cluster). The discovery doc's self-reported `jwks_uri` is a Podman-bridge IP, also not reliably reachable.",
+          "- Decision locked: `auth/jwt-vso` config should use `jwks_url=https://host.containers.internal:6444/openid/v1/jwks` + `jwks_ca_pem=<VSO CA>` + `bound_issuer=<actual iss claim>` (bound_issuer is a string compare only, no reachability needed). Task 02 (kind issuer reconfiguration) is therefore NOT required.",
+          "- New required gap surfaced: default kubeadm/kind RBAC (`system:public-info-viewer`) does not grant unauthenticated access to `/.well-known/openid-configuration` or `/openid/v1/jwks`. Applied `oidc-discovery-reader` ClusterRole/ClusterRoleBinding (granting `system:unauthenticated` GET on those two nonResourceURLs) directly to `kind-vso-lab` for this spike's evidence — it is NOT yet captured in any script and must be added idempotently to `scripts/setup-vso-cluster.sh` by task 04 or 05, or it's lost on cluster recreation.",
+          "- Practical tooling note: Vault's container image has no `curl`; busybox `wget` needs `SSL_CERT_FILE=<path>` (not `--ca-certificate`) for custom CA trust when testing TLS reachability via `kubectl exec`.",
+          "- VSO cluster CA for cross-cluster trust should be pulled from local kubeconfig `certificate-authority-data` (same pattern as `scripts/configure-vso-kubernetes-auth.sh`), not extracted from inside a pod."
+        ],
+        "filesChanged": [
+          "docs/vso-jwt-oidc-auth-spike-01.md (new)",
+          "docs/vso-jwt-oidc-auth-plan.md (Phase 1 updated with decision summary/link)",
+          "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (new",
+          "memory notes)"
+        ],
+        "blockers": [
+          "none — all acceptance/validation criteria for this spike task were met and re-run successfully. The one open follow-up (formalizing the `oidc-discovery-reader` RBAC grant in `scripts/setup-vso-cluster.sh`) is explicitly flagged for tasks 04/05",
+          "not a blocker for task 01 itself."
+        ],
+        "timestamp": "2026-07-10T09:05:31.368Z"
+      },
+      "toolUsage": {
+        "read": 4,
+        "write": 2,
+        "edit": 1,
+        "bash": 29,
+        "other": 1
+      },
+      "outputPreview": "## Summary\n\nI completed the OIDC discovery/JWKS spike for VSO JWT auth against the live two-cluster kind lab (`kind-vault-lab` / `kind-vso-lab`, already running via Podman):\n\n1. **Minted and decoded** a real `vso-demo` service account JWT with audience `vault`, confirming `iss=https://kubernetes.default.svc.cluster.local`, `sub=system:serviceaccount:vso-demo:vso-demo`, `aud=[\"vault\"]`.\n2. **Probed discovery/JWKS endpoints** and found a default-RBAC gap: `system:public-info-viewer` doesn't cover \n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "docs:",
+        "feat:",
+        "chore:",
+        "feat:",
+        "docs:",
+        "feat:",
+        "docs:",
+        "feat:",
+        "chore:"
+      ],
+      "commitSummary": "feat:; docs:; feat: (+2 more); docs:; feat:; docs: (+2 more)"
+    },
+    "02": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:06:47.969Z",
+      "completedAt": "2026-07-10T09:14:21.413Z",
+      "durationMs": 235906,
+      "reflection": {
+        "taskId": "02",
+        "title": "configure-kind-oidc-issuer",
+        "summary": "Confirmed and re-validated Task 01's decision that no kind config template change is required for the VSO cluster issuer/JWKS (default kubeadm issuer + `jwks_url`/`bound_issuer` strategy remains sufficient); added explanatory-only comments, a new decision/evidence doc, and a locking unit test rather than any functional kind config change.",
+        "keyLearnings": [
+          "- Per Phase 1's decision and this task's own \"skip file changes if sufficient\" note, no `service-account-issuer`/`service-account-jwks-uri` kubeadm API server args were added to either kind template — re-verified live (fresh `vso-demo` token `iss`, discovery+JWKS reachability from `vault-0` via `SSL_CERT_FILE`, and confirmed `oidc-discovery-reader` RBAC is still applied on `kind-vso-lab`) and all evidence matches the Task 01 spike exactly.",
+          "- New unit test asserts the *absence* of issuer/JWKS override keys (anchored regex on actual YAML/arg syntax, not prose) plus presence of the certSANs/apiServerPort config the `jwks_url` reachability plan actually depends on — this locks the decision in so a future change can't silently reintroduce issuer complexity without updating docs.",
+          "- Ran all 10 `scripts/tests/test-*.sh` suites after edits; all pass (no regressions from the comment-only edits).",
+          "- Observed that Task 03's env-default work (`scripts/lib/two-cluster-env.sh`, plan doc Phase 3 status) was already present in the working tree when this task started — downstream tasks should `git status`/diff before assuming a clean baseline, since task execution order/parallelism can leave later work already done.",
+          "- The `oidc-discovery-reader` RBAC gap flagged by Task 01 remains unresolved and is explicitly out of scope here — still deferred to task 04/05 (`scripts/setup-vso-cluster.sh`)."
+        ],
+        "filesChanged": [
+          "docs/vso-jwt-oidc-auth-task-02.md (new)",
+          "scripts/tests/test-vso-lab-kind-config-validation.sh (new)",
+          "scripts/create-clusters.sh (comment only)",
+          "scripts/kind/vso-lab-config.yaml.tmpl (comment only)",
+          "docs/vso-jwt-oidc-auth-plan.md (Phase 2 status annotation)",
+          "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+        ],
+        "blockers": [
+          "none — all acceptance/validation criteria for this task were met and re-verified against the live two-cluster environment."
+        ],
+        "timestamp": "2026-07-10T09:10:43.955Z"
+      },
+      "toolUsage": {
+        "read": 4,
+        "write": 2,
+        "edit": 5,
+        "bash": 22,
+        "other": 0
+      },
+      "outputPreview": "Task 02 is complete.\n\n## REFLECTION\nSUMMARY: Confirmed and re-validated Task 01's decision that no kind config template change is required for the VSO cluster issuer/JWKS (default kubeadm issuer + `jwks_url`/`bound_issuer` strategy remains sufficient); added explanatory-only comments, a new decision/evidence doc, and a locking unit test rather than any functional kind config change.\n\nFILES: docs/vso-jwt-oidc-auth-task-02.md (new), scripts/tests/test-vso-lab-kind-config-validation.sh (new), scrip\n... (truncated)",
+      "commitMessages": [
+        "docs:",
+        "feat:",
+        "docs:",
+        "feat:",
+        "chore:",
+        "docs:",
+        "docs:",
+        "feat:",
+        "docs:",
+        "feat:"
+      ],
+      "commitSummary": "docs:; feat:; docs: (+2 more); docs:; docs:; feat: (+2 more)"
+    },
+    "03": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:06:47.970Z",
+      "completedAt": "2026-07-10T09:18:01.715Z",
+      "durationMs": 266912,
+      "reflection": {
+        "taskId": "03",
+        "title": "add-jwt-oidc-env-defaults",
+        "summary": "Added centralized JWT/OIDC auth environment defaults (`VSO_JWT_AUTH_MOUNT`, `VSO_JWT_AUTH_ROLE`, `VSO_JWT_AUDIENCE`, `VSO_OIDC_ISSUER`, `VSO_OIDC_JWKS_URL`) to `scripts/lib/two-cluster-env.sh`, preserved legacy Kubernetes-auth vars for migration compatibility, updated the environment summary helper, and added a new validation test suite proving defaults/overrides/no-unbound-variable behavior (19/19 passing, all other existing test suites still pass).",
+        "keyLearnings": [
+          "- Defaults chosen per task spec/spike: `VSO_JWT_AUTH_MOUNT=jwt-vso`, `VSO_JWT_AUTH_ROLE=vso-demo`, `VSO_JWT_AUDIENCE=vault`, `VSO_OIDC_ISSUER=https://kubernetes.default.svc.cluster.local` (the JWT's real `iss` claim — `bound_issuer` is a string compare, not a fetch URL), `VSO_OIDC_JWKS_URL=${VSO_API_ADDR}/openid/v1/jwks` (derived from the reachable cross-cluster API address).",
+          "- The plan doc's original Phase 3 draft had `VSO_OIDC_ISSUER`/`VSO_OIDC_JWKS_URL` backwards (issuer set to the reachable host, jwks derived from issuer) — corrected per task 01's spike decision and annotated with a status note so future readers don't reintroduce the bug.",
+          "- Legacy `VSO_AUTH_MOUNT`, `VSO_AUTH_ROLE`, `VAULT_TOKEN_REVIEWER_SA` are untouched and explicitly documented as migration-compatibility holdovers — do not remove until all downstream tasks (04-11) have migrated off `auth/kubernetes-vso`.",
+          "- All new vars follow the existing `\"${VAR:-default}\"` override pattern, so they work with both plain env-var overrides and `make setup VSO_JWT_AUDIENCE=...`-style command-line overrides (same mechanism the Makefile already relies on for `VAULT_CONTEXT`/`VSO_CONTEXT`).",
+          "- Noticed task 02 (kind OIDC issuer config) is running concurrently in the same working tree (uncommitted changes to `scripts/create-clusters.sh`, `scripts/kind/vso-lab-config.yaml.tmpl`, new `test-vso-lab-kind-config-validation.sh`, `docs/vso-jwt-oidc-auth-task-02.md`). Verified no file/section overlap with my task 03 edits before finishing.",
+          "- Downstream tasks (04+) should consume `VSO_JWT_AUTH_MOUNT`/`VSO_JWT_AUTH_ROLE`/`VSO_JWT_AUDIENCE`/`VSO_OIDC_ISSUER`/`VSO_OIDC_JWKS_URL` directly from this shared lib rather than redeclaring defaults."
+        ],
+        "filesChanged": [
+          "scripts/lib/two-cluster-env.sh",
+          "scripts/tests/test-two-cluster-env-validation.sh (new)",
+          "docs/vso-jwt-oidc-auth-plan.md"
+        ],
+        "blockers": [
+          "none — all acceptance/validation criteria for task 03 met; task 04's RBAC gap (`oidc-discovery-reader` ClusterRole/Binding) from the task 01 spike is still open but explicitly out of scope for task 03 (belongs to task 04/05)."
+        ],
+        "timestamp": "2026-07-10T09:11:14.962Z"
+      },
+      "toolUsage": {
+        "read": 0,
+        "write": 1,
+        "edit": 5,
+        "bash": 33,
+        "other": 0
+      },
+      "outputPreview": "## REFLECTION\nSUMMARY: Added centralized JWT/OIDC auth environment defaults (`VSO_JWT_AUTH_MOUNT`, `VSO_JWT_AUTH_ROLE`, `VSO_JWT_AUDIENCE`, `VSO_OIDC_ISSUER`, `VSO_OIDC_JWKS_URL`) to `scripts/lib/two-cluster-env.sh`, preserved legacy Kubernetes-auth vars for migration compatibility, updated the environment summary helper, and added a new validation test suite proving defaults/overrides/no-unbound-variable behavior (19/19 passing, all other existing test suites still pass).\n\nFILES: scripts/lib/tw\n... (truncated)",
+      "commitMessages": [
+        "docs:",
+        "feat:",
+        "docs:",
+        "feat:",
+        "chore:",
+        "feat:",
+        "docs:",
+        "docs:",
+        "feat:",
+        "docs:"
+      ],
+      "commitSummary": "docs:; feat:; docs: (+2 more); feat:; docs:; docs: (+2 more)"
+    },
+    "04": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:18:01.717Z",
+      "completedAt": "2026-07-10T09:25:10.634Z",
+      "durationMs": 329075,
+      "reflection": {
+        "taskId": "04",
+        "title": "implement-vso-jwt-auth-setup",
+        "summary": "Implemented `scripts/configure-vso-jwt-auth.sh` (idempotent Vault JWT/OIDC auth setup for VSO, using jwks_url+bound_issuer per the Phase 1 spike decision, strict bound_audiences/bound_subject role binding, no token_reviewer_jwt) plus a 20-assertion validation test suite, and verified live against the real two-cluster lab (idempotency, correct login, wrong-audience/wrong-SA rejections).",
+        "keyLearnings": [
+          "- - Critical gotcha found during live e2e testing: `vault read auth/.../config` in plain-text table format wraps multi-line PEM values (jwks_ca_pem) across many lines with no per-line key prefix on continuation lines — a naive `grep -vE '^jwks_ca_pem'` filter only strips the first line and leaks the rest of the CA cert. Fixed by using `vault read -format=json | jq 'del(.data.jwks_ca_pem, .data.jwt_validation_pubkeys, .data.oidc_discovery_ca_pem)'` instead, which added `jq` to the script's required commands. Any future script reading back JWT/OIDC config for display must follow this pattern.",
+          "- - Live e2e proof captured: correct `vso-demo` JWT (aud=vault) login succeeds and returns `[\"default\" \"mysecret\"]` policies; `--audience not-vault` fails with \"invalid audience (aud) claim\"; `kubectl create token default -n vso-demo` (wrong SA) fails with \"invalid subject (sub) claim\"; `vault auth list` shows `jwt-vso/` and `kubernetes-vso/` coexisting without interference.",
+          "- - Test-writing gotcha: static \"script never writes X\" grep assertions must exclude the script's own explanatory comments/completion-message echoes (which legitimately mention `token_reviewer_jwt`/`oidc_discovery_url` to explain their absence) — match on the actual `key=value` write-argument pattern, not a bare substring.",
+          "- - Deliberately left the `oidc-discovery-reader` ClusterRole/ClusterRoleBinding formalization (flagged by task 01's spike as needed in \"task 04 or 05\") to task 05 (`scripts/setup-vso-cluster.sh`), since task 05's own spec is scoped to that exact file and task 04's spec/steps never mention RBAC. It remains applied out-of-band on the live cluster (confirmed present) but is not yet in any script — task 05 must add it.",
+          "- - Downstream tasks 05-08 (setup-vso-cluster.sh reviewer removal, VaultAuth method:jwt switch, Makefile targets, verify-two-cluster.sh JWT checks) are all still pending and untouched by this task."
+        ],
+        "filesChanged": [
+          "scripts/configure-vso-jwt-auth.sh (new)",
+          "scripts/tests/test-configure-vso-jwt-auth-validation.sh (new)",
+          "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+        ],
+        "blockers": [
+          "none — all acceptance/validation criteria for task 04 met and re-verified live (bash -n",
+          "--check-only",
+          "idempotent double-run",
+          "auth/jwt-vso enabled",
+          "role binds exact vso-demo/vso-demo subject + vault audience",
+          "no token_reviewer_jwt written",
+          "correct/wrong-audience/wrong-SA login proofs",
+          "all 12 test suites passing)."
+        ],
+        "timestamp": "2026-07-10T09:23:30.871Z"
+      },
+      "toolUsage": {
+        "read": 5,
+        "write": 2,
+        "edit": 6,
+        "bash": 33,
+        "other": 0
+      },
+      "outputPreview": "## Summary\n\nImplemented `scripts/configure-vso-jwt-auth.sh`, the idempotent Vault JWT/OIDC auth setup script for the VSO migration, plus its validation test suite.\n\n**What it does:**\n- Enables `auth/${VSO_JWT_AUTH_MOUNT}` (default `jwt-vso`) as a Vault `jwt` auth method (never touching `auth/kubernetes` or the migration-compat `auth/kubernetes-vso`).\n- Configures it with `jwks_url` + `jwks_ca_pem` + `bound_issuer` (per the Phase 1 spike decision — no `oidc_discovery_url`).\n- Writes a strictly-bo\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "docs:",
+        "docs:",
+        "feat:",
+        "docs:",
+        "feat:",
+        "feat:",
+        "docs:",
+        "docs:",
+        "feat:"
+      ],
+      "commitSummary": "feat:; docs:; docs: (+2 more); feat:; feat:; docs: (+2 more)"
+    },
+    "05": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:25:10.636Z",
+      "completedAt": "2026-07-10T09:32:01.841Z",
+      "durationMs": 381400,
+      "reflection": {
+        "taskId": "05",
+        "title": "refactor-vso-cluster-setup",
+        "summary": "Refactored `scripts/setup-vso-cluster.sh` to make JWT/OIDC the default VSO auth path — removed default TokenReview reviewer SA/RBAC (now gated behind `ENABLE_TOKEN_REVIEWER_AUTH=1`), formalized the previously-ad-hoc `oidc-discovery-reader` ClusterRole/ClusterRoleBinding as a default resource, updated all comments/output, and extended the validation test suite with 6 new static assertions plus a live-cluster check.",
+        "keyLearnings": [
+          "- - Decision: removed reviewer SA/RBAC from the default path (per the plan's \"Recommended\" option) rather than deleting it entirely — gated behind `ENABLE_TOKEN_REVIEWER_AUTH=1` so `scripts/configure-vso-kubernetes-auth.sh` (the untouched legacy `auth/kubernetes-vso` path) can still be run standalone for comparison if that flag is set first.",
+          "- - The `oidc-discovery-reader` ClusterRole/ClusterRoleBinding (granting `system:unauthenticated` GET on `/.well-known/openid-configuration` and `/openid/v1/jwks`) was formalized here as explicitly flagged by task 01/04's reflections — it now survives cluster recreate instead of being an ad hoc live-cluster-only fix.",
+          "- - The script does not delete pre-existing `vault-token-reviewer` SAs from prior runs/older setups — only *creation* is gated, not cleanup; a live cluster in this environment still had one from before this task, confirmed harmless and noted informationally by the test rather than failing.",
+          "- - Test-writing pattern: verifying \"resource X only created inside guard Y\" via line-number ordering (`grep -n` + numeric comparison against the guard's `if` line) rather than a nested-parsing approach — reusable pattern for future gated-resource tests.",
+          "- - Confirmed via reading tasks 06/07/08/10 that `scripts/apply-vso-demo.sh` (VaultAuth method switch), Makefile targets, `verify-two-cluster.sh`, and all docs/README/deck updates are explicitly out of scope for task 05 and remain untouched/pending."
+        ],
+        "filesChanged": [
+          "scripts/setup-vso-cluster.sh",
+          "scripts/tests/test-setup-vso-cluster-validation.sh",
+          "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+        ],
+        "blockers": [
+          "none — all acceptance/validation criteria for task 05 met and verified live (bash -n; default run creates no reviewer SA; `ENABLE_TOKEN_REVIEWER_AUTH=1` run creates it; VSO operator Available; vso-demo namespace/SA present; oidc-discovery-reader present; all 12 repo test suites passing",
+          "including 12/12 in the updated test file)."
+        ],
+        "timestamp": "2026-07-10T09:31:32.116Z"
+      },
+      "toolUsage": {
+        "read": 4,
+        "write": 1,
+        "edit": 6,
+        "bash": 39,
+        "other": 0
+      },
+      "outputPreview": "All checks pass. Summary of the work:\n\n**Changes to `scripts/setup-vso-cluster.sh`:**\n- Removed the default creation of the `vault-token-reviewer` service account and `system:auth-delegator` ClusterRoleBinding — now gated behind an explicit `ENABLE_TOKEN_REVIEWER_AUTH=1` opt-in flag (default `0`).\n- Added the `oidc-discovery-reader` ClusterRole/ClusterRoleBinding (unauthenticated GET on `/.well-known/openid-configuration` and `/openid/v1/jwks`) unconditionally by default — this closes the gap fl\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "feat:",
+        "feat:",
+        "docs:",
+        "docs:",
+        "refactor(vso-cluster):",
+        "feat:",
+        "feat:",
+        "feat:",
+        "docs:"
+      ],
+      "commitSummary": "feat:; feat:; feat: (+2 more); refactor(vso-cluster):; feat:; feat: (+2 more)"
+    },
+    "06": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:25:10.637Z",
+      "completedAt": "2026-07-10T09:30:02.390Z",
+      "durationMs": 219396,
+      "reflection": {
+        "taskId": "06",
+        "title": "switch-vso-vaultauth-to-jwt",
+        "summary": "Switched scripts/apply-vso-demo.sh's VaultAuth manifest from Kubernetes auth (method: kubernetes, mount: kubernetes-vso) to JWT/OIDC auth (method: jwt, mount: jwt-vso), with jwt.role/serviceAccount/audiences/tokenExpirationSeconds fields, and updated its static validation test suite; verified live against the two-cluster kind lab that VaultAuth becomes Ready and VaultStaticSecret syncs correctly.",
+        "keyLearnings": [
+          "- Confirmed exact CRD field names live via `kubectl explain vaultauth.spec --recursive`: jwt.{audiences ([]string),role,secretRef,serviceAccount,tokenExpirationSeconds}. No token_reviewer_jwt-equivalent exists under jwt: -- VSO's JWT method uses the pod's own projected ServiceAccount token via jwt.serviceAccount, no stored reviewer credential anywhere.",
+          "- Test isolation trick: to assert the old `kubernetes:` stanza is absent, scope the check to just the VaultAuth manifest block (awk '/^kind: VaultAuth$/,/^---$/'), not the whole file -- the file's header comments legitimately still mention auth/kubernetes-vso for historical/migration context.",
+          "- grep -qF gotcha: a needle starting with '-' (e.g. '- ${VSO_JWT_AUDIENCE}') is misparsed as a flag (\"invalid option --\"). Split into two separate asserts instead of matching the YAML list-item dash literal.",
+          "- Makefile (`make setup`/`configure-vso-auth`/`vso-apply`) still calls scripts/configure-vso-kubernetes-auth.sh, not configure-vso-jwt-auth.sh -- that switch and verify-two-cluster.sh's JWT-specific proofs are explicitly scoped to tasks 07 and 08, not 06. Both auth/jwt-vso and auth/kubernetes-vso coexist on the live cluster; only jwt-vso is now exercised by apply-vso-demo.sh.",
+          "- Live-verified end to end on the real two-cluster lab: VaultAuth Ready/Healthy with method:jwt mount:jwt-vso; VaultStaticSecret SYNCED/HEALTHY/READY=True; native secret synced with baseline value; app pod Ready. All 12 test suites in scripts/tests/ still pass (25/25 in the updated suite)."
+        ],
+        "filesChanged": [
+          "scripts/apply-vso-demo.sh",
+          "scripts/tests/test-apply-vso-demo-validation.sh"
+        ],
+        "blockers": [
+          "none -- all acceptance/validation criteria for task 06 met. Downstream tasks 07 (Makefile/setup flow) and 08 (verify-two-cluster.sh JWT checks) are the next dependents and still need to switch make setup off configure-vso-kubernetes-auth.sh."
+        ],
+        "timestamp": "2026-07-10T09:28:50.108Z"
+      },
+      "toolUsage": {
+        "read": 2,
+        "write": 0,
+        "edit": 4,
+        "bash": 24,
+        "other": 0
+      },
+      "outputPreview": "## Summary\n\nTask 06 is complete. Updated `scripts/apply-vso-demo.sh` to switch the VSO `VaultAuth` custom resource from Kubernetes auth to JWT auth:\n\n- `spec.method: jwt` (was `kubernetes`)\n- `spec.mount: ${VSO_JWT_AUTH_MOUNT}` (defaults to `jwt-vso`, was `${VSO_AUTH_MOUNT}` = `kubernetes-vso`)\n- Replaced `kubernetes:` stanza with `jwt:` stanza: `role: ${VSO_JWT_AUTH_ROLE}`, `serviceAccount: vso-demo`, `audiences: [${VSO_JWT_AUDIENCE}]`, `tokenExpirationSeconds: 600`\n- `VaultConnection` and `Vau\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "feat:",
+        "docs:",
+        "docs:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat:",
+        "docs:",
+        "docs:"
+      ],
+      "commitSummary": "feat:; feat:; docs: (+2 more); feat:; feat:; feat: (+2 more)"
+    },
+    "07": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:32:01.843Z",
+      "completedAt": "2026-07-10T09:35:38.349Z",
+      "durationMs": 153200,
+      "reflection": {
+        "taskId": "07",
+        "title": "update-make-targets-and-setup-flow",
+        "summary": "Switched the Makefile's default two-cluster setup path to JWT/OIDC auth: added a `configure-vso-jwt-auth` target, made `configure-vso-auth` a compatibility alias that depends on it, and updated `setup` to call `scripts/configure-vso-jwt-auth.sh` (not `configure-vso-kubernetes-auth.sh`) before `apply-vso-demo.sh`; added a 14-assertion static validation test suite and live-verified both targets against the real two-cluster lab.",
+        "keyLearnings": [
+          "- - `configure-vso-auth: configure-vso-jwt-auth` uses plain Make prerequisite syntax (no recipe body of its own) — running `make configure-vso-auth` triggers the `configure-vso-jwt-auth` recipe via dependency resolution, which is simpler and avoids recipe duplication vs. `@bash scripts/configure-vso-jwt-auth.sh` copy-pasted into both targets.",
+          "- - `scripts/configure-vso-kubernetes-auth.sh` is intentionally left in the repo untouched and still directly runnable, but now has zero Makefile entry points — it's fully decoupled from `make` while remaining available for manual/legacy use. Downstream task 10 must update stale prose in README.md, PODMAN_MIGRATION.md, and presenterm/vso.md that still says \"make configure-vso-auth # configures auth/kubernetes-vso\" or invokes `scripts/configure-vso-kubernetes-auth.sh` directly in the deck's live code blocks.",
+          "- - Static-analysis gotcha: when grepping scripts for \"does X call configure-vso-kubernetes-auth.sh\", must exclude comment lines (`grep -vE ':[0-9]+:[[:space:]]*#'` on `grep -n` multi-file output) — `scripts/setup-vso-cluster.sh` has multiple explanatory comments referencing the script name for migration-compatibility context, which are not invocations.",
+          "- - Live-verified end to end: `make configure-vso-jwt-auth` and `make configure-vso-auth` both idempotently configure `auth/jwt-vso` in the real kind-vault-lab cluster with `bound_audiences=[vault]`, `bound_subject=system:serviceaccount:vso-demo:vso-demo`, `role_type=jwt`, and no `token_reviewer_jwt` — matching task 04's script behavior exactly.",
+          "- - All 14 test suites under `scripts/tests/` (13 pre-existing + the new one) pass after this change."
+        ],
+        "filesChanged": [
+          "Makefile",
+          "scripts/tests/test-makefile-vso-jwt-auth-validation.sh (new)"
+        ],
+        "blockers": [
+          "none — all acceptance/validation criteria for task 07 met. Task 08 (verify-two-cluster.sh JWT checks) and task 10 (docs/deck prose updates) are the remaining downstream dependents."
+        ],
+        "timestamp": "2026-07-10T09:34:35.120Z"
+      },
+      "toolUsage": {
+        "read": 0,
+        "write": 1,
+        "edit": 2,
+        "bash": 22,
+        "other": 0
+      },
+      "outputPreview": "## REFLECTION\nSUMMARY: Switched the Makefile's default two-cluster setup path to JWT/OIDC auth: added a `configure-vso-jwt-auth` target, made `configure-vso-auth` a compatibility alias that depends on it, and updated `setup` to call `scripts/configure-vso-jwt-auth.sh` (not `configure-vso-kubernetes-auth.sh`) before `apply-vso-demo.sh`; added a 14-assertion static validation test suite and live-verified both targets against the real two-cluster lab.\nFILES: Makefile, scripts/tests/test-makefile-vs\n... (truncated)",
+      "commitMessages": [
+        "refactor(vso-cluster):",
+        "feat:",
+        "feat:",
+        "feat:",
+        "docs:",
+        "feat:",
+        "refactor(vso-cluster):",
+        "feat:",
+        "feat:",
+        "feat:"
+      ],
+      "commitSummary": "refactor(vso-cluster):; feat:; feat: (+2 more); feat:; refactor(vso-cluster):; feat: (+2 more)"
+    },
+    "08": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:32:01.844Z",
+      "completedAt": "2026-07-10T09:38:37.745Z",
+      "durationMs": 360268,
+      "reflection": {
+        "taskId": "08",
+        "title": "update-two-cluster-verification",
+        "summary": "Updated `scripts/verify-two-cluster.sh`'s auth section to authenticate via `auth/jwt-vso` (JWT/OIDC) with a positive `vso-demo`/audience-`vault` login, mandatory wrong-audience and wrong-service-account negative logins, and a strict claim-binding role review, plus an updated final summary; updated its static test suite to match, and verified everything live end-to-end.",
+        "keyLearnings": [
+          "- Negative-login pattern under `set -euo pipefail`: `if kubectl_vault exec ... vault write ... jwt=\"${WRONG_JWT}\" >/dev/null 2>&1; then fail_section ...; fi` — commands used as an `if` condition are exempt from `set -e`, so this correctly treats \"login unexpectedly succeeded\" as the failure branch without needing `|| true` tricks.",
+          "- Role/config strict-binding check reads `auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}` via `vault read -format=json | jq` and compares `bound_audiences`/`bound_subject` exactly against `${VSO_JWT_AUDIENCE}` and `system:serviceaccount:${VSO_NAMESPACE}:vso-demo` — proves the config, not just that a role exists.",
+          "- All minted JWT shell variables (`VSO_SA_JWT`, `WRONG_AUD_JWT`, `WRONG_SA_JWT`) are `unset` right after use and never echoed directly, per the \"don't log full JWT values\" requirement; only Vault's own login response is ever printed on failure.",
+          "- Task 07 (Makefile switch to `configure-vso-jwt-auth.sh` as default) had already landed in the working tree by the time this task ran even though it wasn't in this task's dependency list — worth checking `git log` before assuming a stale baseline in multi-task pipelines.",
+          "- Live-verified against the real two-cluster kind lab: both `bash scripts/verify-two-cluster.sh` and `make verify-two-cluster` pass all 7 sections including both negative auth checks; baseline secret (`larry`) confirmed restored after rotation. All 12 `scripts/tests/test-*.sh` suites (35 assertions in this one) pass with zero regressions."
+        ],
+        "filesChanged": [
+          "scripts/verify-two-cluster.sh",
+          "scripts/tests/test-verify-two-cluster-validation.sh",
+          "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+        ],
+        "blockers": [
+          "none — all acceptance/validation criteria for task 08 met (bash -n; static assertions for `auth/jwt-vso/login`",
+          "wrong-audience/wrong-SA negative paths",
+          "no JWT leakage; live e2e run with all auth/sync/rotation sections passing and baseline restored)."
+        ],
+        "timestamp": "2026-07-10T09:38:02.200Z"
+      },
+      "toolUsage": {
+        "read": 3,
+        "write": 0,
+        "edit": 5,
+        "bash": 22,
+        "other": 0
+      },
+      "outputPreview": "Staged the two changed files for this task.\n\n## REFLECTION\nSUMMARY: Updated `scripts/verify-two-cluster.sh`'s auth section to authenticate via `auth/jwt-vso` (JWT/OIDC) with a positive `vso-demo`/audience-`vault` login, mandatory wrong-audience and wrong-service-account negative logins, and a strict claim-binding role review, plus an updated final summary; updated its static test suite to match, and verified everything live end-to-end.\nFILES: scripts/verify-two-cluster.sh, scripts/tests/test-ver\n... (truncated)",
+      "commitMessages": [
+        "feat:",
+        "refactor(vso-cluster):",
+        "feat:",
+        "feat:",
+        "feat:",
+        "feat(verify-two-cluster):",
+        "feat:",
+        "refactor(vso-cluster):",
+        "feat:",
+        "feat:"
+      ],
+      "commitSummary": "feat:; refactor(vso-cluster):; feat: (+2 more); feat(verify-two-cluster):; feat:; refactor(vso-cluster): (+2 more)"
+    },
+    "09": {
+      "status": "completed",
+      "retries": 0,
+      "startedAt": "2026-07-10T09:38:37.748Z",
+      "completedAt": "2026-07-10T09:46:27.005Z",
+      "durationMs": 397992,
+      "reflection": {
+        "taskId": "09",
+        "title": "update-validation-tests",
+        "summary": "Verified that tasks 04/05/06/07/08 had already brought the entire fast validation suite (13 `scripts/tests/test-*.sh` files) into alignment with the new JWT/OIDC default auth path; added one missing \"idempotent intent\" assertion to `test-configure-vso-jwt-auth-validation.sh` and confirmed zero failures/no stale TokenReview-as-default wording across the whole suite.",
+        "keyLearnings": [
+          "- Because each prior task's spec required updating its own test file alongside its script change, essentially all of task 09's nominal deliverables (`test-configure-vso-jwt-auth-validation.sh`, `test-apply-vso-demo-validation.sh`, `test-setup-vso-cluster-validation.sh`, `test-verify-two-cluster-validation.sh`) were already complete and correct by the time this task ran — task 09 in this run was primarily a verification pass plus one small gap fill (idempotent-enable-guard assertion, now 21/21 in that file).",
+          "- Scope boundary: `vso-demo.sh` (root demo narration script) and `presenterm/vso.md` deck content belong explicitly to task 10 (`update-demo-scripts-docs-and-deck`), not task 09. `vso-demo.sh` still narrates the old TokenReview/`auth/${VSO_AUTH_MOUNT}` path today — this is a known, deliberately deferred gap for task 10, not a task 09 regression, since `test-vso-demo-validation.sh` only asserts the variable name generically (no hardcoded stale text) and doesn't need a task-09 fix.",
+          "- Tasks 09 and 10 have no `depends_on` relationship and run concurrently in the same working tree — confirmed live via `.ralpi/progress.json` showing task 10 `in_progress` with uncommitted edits to `README.md`/`PODMAN_MIGRATION.md` while this task ran. Committed only the specific files changed here (`git add <files>`, not `-A`) to avoid capturing another in-flight task's work.",
+          "- All 13 `scripts/tests/test-*.sh` suites pass (186 total assertions), with no test expecting `auth/kubernetes-vso` as the default VSO path and no test depending on a default reviewer JWT — both are correctly gated behind `ENABLE_TOKEN_REVIEWER_AUTH=1`/kept as legacy-compat only."
+        ],
+        "filesChanged": [
+          "scripts/tests/test-configure-vso-jwt-auth-validation.sh",
+          "tasks/vso-jwt-oidc-auth/README.md",
+          "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+        ],
+        "blockers": [
+          "none — all acceptance/validation criteria for task 09 met (fast validation suite passes fully",
+          "JWT role-binding tests fail without `bound_audiences`/`bound_subject`",
+          "VaultAuth regression to `method: kubernetes` is caught). Task 10's live update to `vso-demo.sh`/`presenterm/vso.md` (in progress concurrently) is the next dependent and was intentionally left untouched."
+        ],
+        "timestamp": "2026-07-10T09:45:15.822Z"
+      },
+      "toolUsage": {
+        "read": 7,
+        "write": 0,
+        "edit": 5,
+        "bash": 41,
+        "other": 0
+      },
+      "outputPreview": "All 13 fast validation suites pass with zero failures, and the commit is in place.\n\n## REFLECTION\nSUMMARY: Verified that tasks 04/05/06/07/08 had already brought the entire fast validation suite (13 `scripts/tests/test-*.sh` files) into alignment with the new JWT/OIDC default auth path; added one missing \"idempotent intent\" assertion to `test-configure-vso-jwt-auth-validation.sh` and confirmed zero failures/no stale TokenReview-as-default wording across the whole suite.\n\nFILES: scripts/tests/tes\n... (truncated)",
+      "commitMessages": [
+        "test(vso-jwt-oidc-auth):",
+        "feat(verify-two-cluster):",
+        "feat:",
+        "refactor(vso-cluster):",
+        "feat:",
+        "test(vso-jwt-oidc-auth):",
+        "feat(verify-two-cluster):",
+        "feat:",
+        "refactor(vso-cluster):",
+        "feat:"
+      ],
+      "commitSummary": "test(vso-jwt-oidc-auth):; feat(verify-two-cluster):; feat: (+2 more); test(vso-jwt-oidc-auth):; feat(verify-two-cluster):; feat: (+2 more)"
     }
   },
   "startedAt": "2026-07-10T08:59:33.273Z",
-  "lastUpdatedAt": "2026-07-10T09:00:10.604Z",
+  "lastUpdatedAt": "2026-07-11T00:55:26.615Z",
   "paused": false,
   "prds": {
     "tasks-vso-two-cluster-podman-README-md": {
@@ -630,14 +1139,523 @@
     "tasks-vso-jwt-oidc-auth-README-md": {
       "sourcePath": "/Users/larry.song/work/hashicorp/vault-k8s-demo/tasks/vso-jwt-oidc-auth/README.md",
       "tasks": {
-        "01": {
-          "status": "in_progress",
+        "10": {
+          "status": "completed",
           "retries": 0,
-          "startedAt": "2026-07-10T09:00:10.604Z"
+          "startedAt": "2026-07-11T00:09:13.178Z",
+          "completedAt": "2026-07-11T00:14:54.304Z",
+          "durationMs": 280936,
+          "reflection": {
+            "taskId": "10",
+            "title": "update-demo-scripts-docs-and-deck",
+            "summary": "Verified, live-tested, and committed the already-drafted JWT/OIDC rewrite of README.md, PODMAN_MIGRATION.md, three docs/ design/audit files, presenterm/vso.md, and vso-demo.sh, plus two new static test suites guarding against stale TokenReview-as-default language and deck structural regressions.",
+            "keyLearnings": [
+              "- All task-10 deliverables were already fully drafted (uncommitted) in the working tree when this run started, from a prior interrupted attempt — verification-first approach (read everything, run all tests, live-verify) was correct rather than re-authoring from scratch.",
+              "- Doc taxonomy established: \"customer-facing\" docs (README.md, PODMAN_MIGRATION.md, vso-demo.sh, presenterm/vso.md) must present JWT/OIDC as default with legacy TokenReview mentions only in explicitly-framed comparison context; \"historical/internal\" docs (the 3 docs/vso-*.md design/audit files) may keep old narrative in-body but need a prominent \"Superseded on auth method\" callout near the top linking to vso-jwt-oidc-auth-plan.md.",
+              "- The unrelated top-level Agent Injector/OTel README section legitimately still uses TokenReview as its own actual (non-VSO) auth method — this is correctly exempted by the doc test's heuristic (only flags TokenReview lines that also mention vso/jwt-vso/jwt-oidc).",
+              "- New test files are strictly static (bash -n, grep/awk checks) and never invoke presenterm, per the hard PTY-hang guardrail; test-vso-deck-validation.sh only does `command -v presenterm` for an informational version string.",
+              "- Live end-to-end proof against the real two-cluster kind lab: `make verify-two-cluster` (7/7 sections) and a full non-interactive `vso-demo.sh` run both pass, including wrong-audience and wrong-service-account JWT rejection and rotation-then-restore-to-`larry`; re-verified cleanliness after the demo run.",
+              "- Live presenterm Ctrl-E validation of `make vso-deck` is explicitly out of scope for task 10 and deferred to task 11's tmux-backed validator."
+            ],
+            "filesChanged": [
+              "README.md",
+              "PODMAN_MIGRATION.md",
+              "docs/vso-demo-design.md",
+              "docs/vso-two-cluster-audit.md",
+              "docs/vso-two-cluster-podman-plan.md",
+              "presenterm/vso.md",
+              "vso-demo.sh",
+              "scripts/tests/test-vso-demo-validation.sh",
+              "scripts/tests/test-vso-docs-validation.sh (new)",
+              "scripts/tests/test-vso-deck-validation.sh (new)"
+            ],
+            "blockers": [
+              "none — all task 10 acceptance/validation criteria met; 15/15 scripts/tests/test-*.sh suites pass; live two-cluster verification green before and after the demo run."
+            ],
+            "timestamp": "2026-07-11T00:13:54.204Z"
+          },
+          "toolUsage": {
+            "read": 2,
+            "write": 0,
+            "edit": 0,
+            "bash": 29,
+            "other": 0
+          },
+          "outputPreview": "Task 10 is complete. Summary of what was verified/done:\n\n- Found that all deliverables (README.md, PODMAN_MIGRATION.md, docs/vso-demo-design.md, docs/vso-two-cluster-audit.md, docs/vso-two-cluster-podman-plan.md, presenterm/vso.md, vso-demo.sh, and two new test files) were already present as uncommitted edits from a prior interrupted run.\n- Reviewed all content in depth for correctness and completeness against the acceptance criteria (JWT/OIDC as default, `auth/jwt-vso` references, no `token_rev\n... (truncated)",
+          "commitMessages": [
+            "docs(vso):",
+            "test(vso-jwt-oidc-auth):",
+            "feat(verify-two-cluster):",
+            "feat:",
+            "refactor(vso-cluster):"
+          ],
+          "commitSummary": "docs(vso):; test(vso-jwt-oidc-auth):; feat(verify-two-cluster): (+2 more)"
+        },
+        "11": {
+          "status": "failed",
+          "retries": 1,
+          "startedAt": "2026-07-11T00:35:26.591Z",
+          "error": "Task timed out after 20m 0s"
+        },
+        "01": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:00:10.604Z",
+          "completedAt": "2026-07-10T09:06:47.967Z",
+          "durationMs": 320703,
+          "reflection": {
+            "taskId": "01",
+            "title": "spike-oidc-discovery-and-jwks",
+            "summary": "Spiked VSO cluster JWT issuer/JWKS discovery against the live two-cluster kind lab, proved reachability from the Vault cluster, and documented the decision to use `jwks_url` (not `oidc_discovery_url`) for `auth/jwt-vso`, plus a required RBAC fix for anonymous discovery/JWKS access.",
+            "keyLearnings": [
+              "- Default kind `iss` claim (`https://kubernetes.default.svc.cluster.local`) is cluster-internal and unsafe/unreachable cross-cluster (it resolves to the *wrong* cluster's own API server from the other kind cluster). The discovery doc's self-reported `jwks_uri` is a Podman-bridge IP, also not reliably reachable.",
+              "- Decision locked: `auth/jwt-vso` config should use `jwks_url=https://host.containers.internal:6444/openid/v1/jwks` + `jwks_ca_pem=<VSO CA>` + `bound_issuer=<actual iss claim>` (bound_issuer is a string compare only, no reachability needed). Task 02 (kind issuer reconfiguration) is therefore NOT required.",
+              "- New required gap surfaced: default kubeadm/kind RBAC (`system:public-info-viewer`) does not grant unauthenticated access to `/.well-known/openid-configuration` or `/openid/v1/jwks`. Applied `oidc-discovery-reader` ClusterRole/ClusterRoleBinding (granting `system:unauthenticated` GET on those two nonResourceURLs) directly to `kind-vso-lab` for this spike's evidence — it is NOT yet captured in any script and must be added idempotently to `scripts/setup-vso-cluster.sh` by task 04 or 05, or it's lost on cluster recreation.",
+              "- Practical tooling note: Vault's container image has no `curl`; busybox `wget` needs `SSL_CERT_FILE=<path>` (not `--ca-certificate`) for custom CA trust when testing TLS reachability via `kubectl exec`.",
+              "- VSO cluster CA for cross-cluster trust should be pulled from local kubeconfig `certificate-authority-data` (same pattern as `scripts/configure-vso-kubernetes-auth.sh`), not extracted from inside a pod."
+            ],
+            "filesChanged": [
+              "docs/vso-jwt-oidc-auth-spike-01.md (new)",
+              "docs/vso-jwt-oidc-auth-plan.md (Phase 1 updated with decision summary/link)",
+              "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (new",
+              "memory notes)"
+            ],
+            "blockers": [
+              "none — all acceptance/validation criteria for this spike task were met and re-run successfully. The one open follow-up (formalizing the `oidc-discovery-reader` RBAC grant in `scripts/setup-vso-cluster.sh`) is explicitly flagged for tasks 04/05",
+              "not a blocker for task 01 itself."
+            ],
+            "timestamp": "2026-07-10T09:05:31.368Z"
+          },
+          "toolUsage": {
+            "read": 4,
+            "write": 2,
+            "edit": 1,
+            "bash": 29,
+            "other": 1
+          },
+          "outputPreview": "## Summary\n\nI completed the OIDC discovery/JWKS spike for VSO JWT auth against the live two-cluster kind lab (`kind-vault-lab` / `kind-vso-lab`, already running via Podman):\n\n1. **Minted and decoded** a real `vso-demo` service account JWT with audience `vault`, confirming `iss=https://kubernetes.default.svc.cluster.local`, `sub=system:serviceaccount:vso-demo:vso-demo`, `aud=[\"vault\"]`.\n2. **Probed discovery/JWKS endpoints** and found a default-RBAC gap: `system:public-info-viewer` doesn't cover \n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "docs:",
+            "feat:",
+            "chore:",
+            "feat:",
+            "docs:",
+            "feat:",
+            "docs:",
+            "feat:",
+            "chore:"
+          ],
+          "commitSummary": "feat:; docs:; feat: (+2 more); docs:; feat:; docs: (+2 more)"
+        },
+        "02": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:06:47.969Z",
+          "completedAt": "2026-07-10T09:14:21.413Z",
+          "durationMs": 235906,
+          "reflection": {
+            "taskId": "02",
+            "title": "configure-kind-oidc-issuer",
+            "summary": "Confirmed and re-validated Task 01's decision that no kind config template change is required for the VSO cluster issuer/JWKS (default kubeadm issuer + `jwks_url`/`bound_issuer` strategy remains sufficient); added explanatory-only comments, a new decision/evidence doc, and a locking unit test rather than any functional kind config change.",
+            "keyLearnings": [
+              "- Per Phase 1's decision and this task's own \"skip file changes if sufficient\" note, no `service-account-issuer`/`service-account-jwks-uri` kubeadm API server args were added to either kind template — re-verified live (fresh `vso-demo` token `iss`, discovery+JWKS reachability from `vault-0` via `SSL_CERT_FILE`, and confirmed `oidc-discovery-reader` RBAC is still applied on `kind-vso-lab`) and all evidence matches the Task 01 spike exactly.",
+              "- New unit test asserts the *absence* of issuer/JWKS override keys (anchored regex on actual YAML/arg syntax, not prose) plus presence of the certSANs/apiServerPort config the `jwks_url` reachability plan actually depends on — this locks the decision in so a future change can't silently reintroduce issuer complexity without updating docs.",
+              "- Ran all 10 `scripts/tests/test-*.sh` suites after edits; all pass (no regressions from the comment-only edits).",
+              "- Observed that Task 03's env-default work (`scripts/lib/two-cluster-env.sh`, plan doc Phase 3 status) was already present in the working tree when this task started — downstream tasks should `git status`/diff before assuming a clean baseline, since task execution order/parallelism can leave later work already done.",
+              "- The `oidc-discovery-reader` RBAC gap flagged by Task 01 remains unresolved and is explicitly out of scope here — still deferred to task 04/05 (`scripts/setup-vso-cluster.sh`)."
+            ],
+            "filesChanged": [
+              "docs/vso-jwt-oidc-auth-task-02.md (new)",
+              "scripts/tests/test-vso-lab-kind-config-validation.sh (new)",
+              "scripts/create-clusters.sh (comment only)",
+              "scripts/kind/vso-lab-config.yaml.tmpl (comment only)",
+              "docs/vso-jwt-oidc-auth-plan.md (Phase 2 status annotation)",
+              "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+            ],
+            "blockers": [
+              "none — all acceptance/validation criteria for this task were met and re-verified against the live two-cluster environment."
+            ],
+            "timestamp": "2026-07-10T09:10:43.955Z"
+          },
+          "toolUsage": {
+            "read": 4,
+            "write": 2,
+            "edit": 5,
+            "bash": 22,
+            "other": 0
+          },
+          "outputPreview": "Task 02 is complete.\n\n## REFLECTION\nSUMMARY: Confirmed and re-validated Task 01's decision that no kind config template change is required for the VSO cluster issuer/JWKS (default kubeadm issuer + `jwks_url`/`bound_issuer` strategy remains sufficient); added explanatory-only comments, a new decision/evidence doc, and a locking unit test rather than any functional kind config change.\n\nFILES: docs/vso-jwt-oidc-auth-task-02.md (new), scripts/tests/test-vso-lab-kind-config-validation.sh (new), scrip\n... (truncated)",
+          "commitMessages": [
+            "docs:",
+            "feat:",
+            "docs:",
+            "feat:",
+            "chore:",
+            "docs:",
+            "docs:",
+            "feat:",
+            "docs:",
+            "feat:"
+          ],
+          "commitSummary": "docs:; feat:; docs: (+2 more); docs:; docs:; feat: (+2 more)"
+        },
+        "03": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:06:47.970Z",
+          "completedAt": "2026-07-10T09:18:01.715Z",
+          "durationMs": 266912,
+          "reflection": {
+            "taskId": "03",
+            "title": "add-jwt-oidc-env-defaults",
+            "summary": "Added centralized JWT/OIDC auth environment defaults (`VSO_JWT_AUTH_MOUNT`, `VSO_JWT_AUTH_ROLE`, `VSO_JWT_AUDIENCE`, `VSO_OIDC_ISSUER`, `VSO_OIDC_JWKS_URL`) to `scripts/lib/two-cluster-env.sh`, preserved legacy Kubernetes-auth vars for migration compatibility, updated the environment summary helper, and added a new validation test suite proving defaults/overrides/no-unbound-variable behavior (19/19 passing, all other existing test suites still pass).",
+            "keyLearnings": [
+              "- Defaults chosen per task spec/spike: `VSO_JWT_AUTH_MOUNT=jwt-vso`, `VSO_JWT_AUTH_ROLE=vso-demo`, `VSO_JWT_AUDIENCE=vault`, `VSO_OIDC_ISSUER=https://kubernetes.default.svc.cluster.local` (the JWT's real `iss` claim — `bound_issuer` is a string compare, not a fetch URL), `VSO_OIDC_JWKS_URL=${VSO_API_ADDR}/openid/v1/jwks` (derived from the reachable cross-cluster API address).",
+              "- The plan doc's original Phase 3 draft had `VSO_OIDC_ISSUER`/`VSO_OIDC_JWKS_URL` backwards (issuer set to the reachable host, jwks derived from issuer) — corrected per task 01's spike decision and annotated with a status note so future readers don't reintroduce the bug.",
+              "- Legacy `VSO_AUTH_MOUNT`, `VSO_AUTH_ROLE`, `VAULT_TOKEN_REVIEWER_SA` are untouched and explicitly documented as migration-compatibility holdovers — do not remove until all downstream tasks (04-11) have migrated off `auth/kubernetes-vso`.",
+              "- All new vars follow the existing `\"${VAR:-default}\"` override pattern, so they work with both plain env-var overrides and `make setup VSO_JWT_AUDIENCE=...`-style command-line overrides (same mechanism the Makefile already relies on for `VAULT_CONTEXT`/`VSO_CONTEXT`).",
+              "- Noticed task 02 (kind OIDC issuer config) is running concurrently in the same working tree (uncommitted changes to `scripts/create-clusters.sh`, `scripts/kind/vso-lab-config.yaml.tmpl`, new `test-vso-lab-kind-config-validation.sh`, `docs/vso-jwt-oidc-auth-task-02.md`). Verified no file/section overlap with my task 03 edits before finishing.",
+              "- Downstream tasks (04+) should consume `VSO_JWT_AUTH_MOUNT`/`VSO_JWT_AUTH_ROLE`/`VSO_JWT_AUDIENCE`/`VSO_OIDC_ISSUER`/`VSO_OIDC_JWKS_URL` directly from this shared lib rather than redeclaring defaults."
+            ],
+            "filesChanged": [
+              "scripts/lib/two-cluster-env.sh",
+              "scripts/tests/test-two-cluster-env-validation.sh (new)",
+              "docs/vso-jwt-oidc-auth-plan.md"
+            ],
+            "blockers": [
+              "none — all acceptance/validation criteria for task 03 met; task 04's RBAC gap (`oidc-discovery-reader` ClusterRole/Binding) from the task 01 spike is still open but explicitly out of scope for task 03 (belongs to task 04/05)."
+            ],
+            "timestamp": "2026-07-10T09:11:14.962Z"
+          },
+          "toolUsage": {
+            "read": 0,
+            "write": 1,
+            "edit": 5,
+            "bash": 33,
+            "other": 0
+          },
+          "outputPreview": "## REFLECTION\nSUMMARY: Added centralized JWT/OIDC auth environment defaults (`VSO_JWT_AUTH_MOUNT`, `VSO_JWT_AUTH_ROLE`, `VSO_JWT_AUDIENCE`, `VSO_OIDC_ISSUER`, `VSO_OIDC_JWKS_URL`) to `scripts/lib/two-cluster-env.sh`, preserved legacy Kubernetes-auth vars for migration compatibility, updated the environment summary helper, and added a new validation test suite proving defaults/overrides/no-unbound-variable behavior (19/19 passing, all other existing test suites still pass).\n\nFILES: scripts/lib/tw\n... (truncated)",
+          "commitMessages": [
+            "docs:",
+            "feat:",
+            "docs:",
+            "feat:",
+            "chore:",
+            "feat:",
+            "docs:",
+            "docs:",
+            "feat:",
+            "docs:"
+          ],
+          "commitSummary": "docs:; feat:; docs: (+2 more); feat:; docs:; docs: (+2 more)"
+        },
+        "04": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:18:01.717Z",
+          "completedAt": "2026-07-10T09:25:10.634Z",
+          "durationMs": 329075,
+          "reflection": {
+            "taskId": "04",
+            "title": "implement-vso-jwt-auth-setup",
+            "summary": "Implemented `scripts/configure-vso-jwt-auth.sh` (idempotent Vault JWT/OIDC auth setup for VSO, using jwks_url+bound_issuer per the Phase 1 spike decision, strict bound_audiences/bound_subject role binding, no token_reviewer_jwt) plus a 20-assertion validation test suite, and verified live against the real two-cluster lab (idempotency, correct login, wrong-audience/wrong-SA rejections).",
+            "keyLearnings": [
+              "- - Critical gotcha found during live e2e testing: `vault read auth/.../config` in plain-text table format wraps multi-line PEM values (jwks_ca_pem) across many lines with no per-line key prefix on continuation lines — a naive `grep -vE '^jwks_ca_pem'` filter only strips the first line and leaks the rest of the CA cert. Fixed by using `vault read -format=json | jq 'del(.data.jwks_ca_pem, .data.jwt_validation_pubkeys, .data.oidc_discovery_ca_pem)'` instead, which added `jq` to the script's required commands. Any future script reading back JWT/OIDC config for display must follow this pattern.",
+              "- - Live e2e proof captured: correct `vso-demo` JWT (aud=vault) login succeeds and returns `[\"default\" \"mysecret\"]` policies; `--audience not-vault` fails with \"invalid audience (aud) claim\"; `kubectl create token default -n vso-demo` (wrong SA) fails with \"invalid subject (sub) claim\"; `vault auth list` shows `jwt-vso/` and `kubernetes-vso/` coexisting without interference.",
+              "- - Test-writing gotcha: static \"script never writes X\" grep assertions must exclude the script's own explanatory comments/completion-message echoes (which legitimately mention `token_reviewer_jwt`/`oidc_discovery_url` to explain their absence) — match on the actual `key=value` write-argument pattern, not a bare substring.",
+              "- - Deliberately left the `oidc-discovery-reader` ClusterRole/ClusterRoleBinding formalization (flagged by task 01's spike as needed in \"task 04 or 05\") to task 05 (`scripts/setup-vso-cluster.sh`), since task 05's own spec is scoped to that exact file and task 04's spec/steps never mention RBAC. It remains applied out-of-band on the live cluster (confirmed present) but is not yet in any script — task 05 must add it.",
+              "- - Downstream tasks 05-08 (setup-vso-cluster.sh reviewer removal, VaultAuth method:jwt switch, Makefile targets, verify-two-cluster.sh JWT checks) are all still pending and untouched by this task."
+            ],
+            "filesChanged": [
+              "scripts/configure-vso-jwt-auth.sh (new)",
+              "scripts/tests/test-configure-vso-jwt-auth-validation.sh (new)",
+              "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+            ],
+            "blockers": [
+              "none — all acceptance/validation criteria for task 04 met and re-verified live (bash -n",
+              "--check-only",
+              "idempotent double-run",
+              "auth/jwt-vso enabled",
+              "role binds exact vso-demo/vso-demo subject + vault audience",
+              "no token_reviewer_jwt written",
+              "correct/wrong-audience/wrong-SA login proofs",
+              "all 12 test suites passing)."
+            ],
+            "timestamp": "2026-07-10T09:23:30.871Z"
+          },
+          "toolUsage": {
+            "read": 5,
+            "write": 2,
+            "edit": 6,
+            "bash": 33,
+            "other": 0
+          },
+          "outputPreview": "## Summary\n\nImplemented `scripts/configure-vso-jwt-auth.sh`, the idempotent Vault JWT/OIDC auth setup script for the VSO migration, plus its validation test suite.\n\n**What it does:**\n- Enables `auth/${VSO_JWT_AUTH_MOUNT}` (default `jwt-vso`) as a Vault `jwt` auth method (never touching `auth/kubernetes` or the migration-compat `auth/kubernetes-vso`).\n- Configures it with `jwks_url` + `jwks_ca_pem` + `bound_issuer` (per the Phase 1 spike decision — no `oidc_discovery_url`).\n- Writes a strictly-bo\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "docs:",
+            "docs:",
+            "feat:",
+            "docs:",
+            "feat:",
+            "feat:",
+            "docs:",
+            "docs:",
+            "feat:"
+          ],
+          "commitSummary": "feat:; docs:; docs: (+2 more); feat:; feat:; docs: (+2 more)"
+        },
+        "05": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:25:10.636Z",
+          "completedAt": "2026-07-10T09:32:01.841Z",
+          "durationMs": 381400,
+          "reflection": {
+            "taskId": "05",
+            "title": "refactor-vso-cluster-setup",
+            "summary": "Refactored `scripts/setup-vso-cluster.sh` to make JWT/OIDC the default VSO auth path — removed default TokenReview reviewer SA/RBAC (now gated behind `ENABLE_TOKEN_REVIEWER_AUTH=1`), formalized the previously-ad-hoc `oidc-discovery-reader` ClusterRole/ClusterRoleBinding as a default resource, updated all comments/output, and extended the validation test suite with 6 new static assertions plus a live-cluster check.",
+            "keyLearnings": [
+              "- - Decision: removed reviewer SA/RBAC from the default path (per the plan's \"Recommended\" option) rather than deleting it entirely — gated behind `ENABLE_TOKEN_REVIEWER_AUTH=1` so `scripts/configure-vso-kubernetes-auth.sh` (the untouched legacy `auth/kubernetes-vso` path) can still be run standalone for comparison if that flag is set first.",
+              "- - The `oidc-discovery-reader` ClusterRole/ClusterRoleBinding (granting `system:unauthenticated` GET on `/.well-known/openid-configuration` and `/openid/v1/jwks`) was formalized here as explicitly flagged by task 01/04's reflections — it now survives cluster recreate instead of being an ad hoc live-cluster-only fix.",
+              "- - The script does not delete pre-existing `vault-token-reviewer` SAs from prior runs/older setups — only *creation* is gated, not cleanup; a live cluster in this environment still had one from before this task, confirmed harmless and noted informationally by the test rather than failing.",
+              "- - Test-writing pattern: verifying \"resource X only created inside guard Y\" via line-number ordering (`grep -n` + numeric comparison against the guard's `if` line) rather than a nested-parsing approach — reusable pattern for future gated-resource tests.",
+              "- - Confirmed via reading tasks 06/07/08/10 that `scripts/apply-vso-demo.sh` (VaultAuth method switch), Makefile targets, `verify-two-cluster.sh`, and all docs/README/deck updates are explicitly out of scope for task 05 and remain untouched/pending."
+            ],
+            "filesChanged": [
+              "scripts/setup-vso-cluster.sh",
+              "scripts/tests/test-setup-vso-cluster-validation.sh",
+              "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+            ],
+            "blockers": [
+              "none — all acceptance/validation criteria for task 05 met and verified live (bash -n; default run creates no reviewer SA; `ENABLE_TOKEN_REVIEWER_AUTH=1` run creates it; VSO operator Available; vso-demo namespace/SA present; oidc-discovery-reader present; all 12 repo test suites passing",
+              "including 12/12 in the updated test file)."
+            ],
+            "timestamp": "2026-07-10T09:31:32.116Z"
+          },
+          "toolUsage": {
+            "read": 4,
+            "write": 1,
+            "edit": 6,
+            "bash": 39,
+            "other": 0
+          },
+          "outputPreview": "All checks pass. Summary of the work:\n\n**Changes to `scripts/setup-vso-cluster.sh`:**\n- Removed the default creation of the `vault-token-reviewer` service account and `system:auth-delegator` ClusterRoleBinding — now gated behind an explicit `ENABLE_TOKEN_REVIEWER_AUTH=1` opt-in flag (default `0`).\n- Added the `oidc-discovery-reader` ClusterRole/ClusterRoleBinding (unauthenticated GET on `/.well-known/openid-configuration` and `/openid/v1/jwks`) unconditionally by default — this closes the gap fl\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "feat:",
+            "feat:",
+            "docs:",
+            "docs:",
+            "refactor(vso-cluster):",
+            "feat:",
+            "feat:",
+            "feat:",
+            "docs:"
+          ],
+          "commitSummary": "feat:; feat:; feat: (+2 more); refactor(vso-cluster):; feat:; feat: (+2 more)"
+        },
+        "06": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:25:10.637Z",
+          "completedAt": "2026-07-10T09:30:02.390Z",
+          "durationMs": 219396,
+          "reflection": {
+            "taskId": "06",
+            "title": "switch-vso-vaultauth-to-jwt",
+            "summary": "Switched scripts/apply-vso-demo.sh's VaultAuth manifest from Kubernetes auth (method: kubernetes, mount: kubernetes-vso) to JWT/OIDC auth (method: jwt, mount: jwt-vso), with jwt.role/serviceAccount/audiences/tokenExpirationSeconds fields, and updated its static validation test suite; verified live against the two-cluster kind lab that VaultAuth becomes Ready and VaultStaticSecret syncs correctly.",
+            "keyLearnings": [
+              "- Confirmed exact CRD field names live via `kubectl explain vaultauth.spec --recursive`: jwt.{audiences ([]string),role,secretRef,serviceAccount,tokenExpirationSeconds}. No token_reviewer_jwt-equivalent exists under jwt: -- VSO's JWT method uses the pod's own projected ServiceAccount token via jwt.serviceAccount, no stored reviewer credential anywhere.",
+              "- Test isolation trick: to assert the old `kubernetes:` stanza is absent, scope the check to just the VaultAuth manifest block (awk '/^kind: VaultAuth$/,/^---$/'), not the whole file -- the file's header comments legitimately still mention auth/kubernetes-vso for historical/migration context.",
+              "- grep -qF gotcha: a needle starting with '-' (e.g. '- ${VSO_JWT_AUDIENCE}') is misparsed as a flag (\"invalid option --\"). Split into two separate asserts instead of matching the YAML list-item dash literal.",
+              "- Makefile (`make setup`/`configure-vso-auth`/`vso-apply`) still calls scripts/configure-vso-kubernetes-auth.sh, not configure-vso-jwt-auth.sh -- that switch and verify-two-cluster.sh's JWT-specific proofs are explicitly scoped to tasks 07 and 08, not 06. Both auth/jwt-vso and auth/kubernetes-vso coexist on the live cluster; only jwt-vso is now exercised by apply-vso-demo.sh.",
+              "- Live-verified end to end on the real two-cluster lab: VaultAuth Ready/Healthy with method:jwt mount:jwt-vso; VaultStaticSecret SYNCED/HEALTHY/READY=True; native secret synced with baseline value; app pod Ready. All 12 test suites in scripts/tests/ still pass (25/25 in the updated suite)."
+            ],
+            "filesChanged": [
+              "scripts/apply-vso-demo.sh",
+              "scripts/tests/test-apply-vso-demo-validation.sh"
+            ],
+            "blockers": [
+              "none -- all acceptance/validation criteria for task 06 met. Downstream tasks 07 (Makefile/setup flow) and 08 (verify-two-cluster.sh JWT checks) are the next dependents and still need to switch make setup off configure-vso-kubernetes-auth.sh."
+            ],
+            "timestamp": "2026-07-10T09:28:50.108Z"
+          },
+          "toolUsage": {
+            "read": 2,
+            "write": 0,
+            "edit": 4,
+            "bash": 24,
+            "other": 0
+          },
+          "outputPreview": "## Summary\n\nTask 06 is complete. Updated `scripts/apply-vso-demo.sh` to switch the VSO `VaultAuth` custom resource from Kubernetes auth to JWT auth:\n\n- `spec.method: jwt` (was `kubernetes`)\n- `spec.mount: ${VSO_JWT_AUTH_MOUNT}` (defaults to `jwt-vso`, was `${VSO_AUTH_MOUNT}` = `kubernetes-vso`)\n- Replaced `kubernetes:` stanza with `jwt:` stanza: `role: ${VSO_JWT_AUTH_ROLE}`, `serviceAccount: vso-demo`, `audiences: [${VSO_JWT_AUDIENCE}]`, `tokenExpirationSeconds: 600`\n- `VaultConnection` and `Vau\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "feat:",
+            "docs:",
+            "docs:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat:",
+            "docs:",
+            "docs:"
+          ],
+          "commitSummary": "feat:; feat:; docs: (+2 more); feat:; feat:; feat: (+2 more)"
+        },
+        "07": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:32:01.843Z",
+          "completedAt": "2026-07-10T09:35:38.349Z",
+          "durationMs": 153200,
+          "reflection": {
+            "taskId": "07",
+            "title": "update-make-targets-and-setup-flow",
+            "summary": "Switched the Makefile's default two-cluster setup path to JWT/OIDC auth: added a `configure-vso-jwt-auth` target, made `configure-vso-auth` a compatibility alias that depends on it, and updated `setup` to call `scripts/configure-vso-jwt-auth.sh` (not `configure-vso-kubernetes-auth.sh`) before `apply-vso-demo.sh`; added a 14-assertion static validation test suite and live-verified both targets against the real two-cluster lab.",
+            "keyLearnings": [
+              "- - `configure-vso-auth: configure-vso-jwt-auth` uses plain Make prerequisite syntax (no recipe body of its own) — running `make configure-vso-auth` triggers the `configure-vso-jwt-auth` recipe via dependency resolution, which is simpler and avoids recipe duplication vs. `@bash scripts/configure-vso-jwt-auth.sh` copy-pasted into both targets.",
+              "- - `scripts/configure-vso-kubernetes-auth.sh` is intentionally left in the repo untouched and still directly runnable, but now has zero Makefile entry points — it's fully decoupled from `make` while remaining available for manual/legacy use. Downstream task 10 must update stale prose in README.md, PODMAN_MIGRATION.md, and presenterm/vso.md that still says \"make configure-vso-auth # configures auth/kubernetes-vso\" or invokes `scripts/configure-vso-kubernetes-auth.sh` directly in the deck's live code blocks.",
+              "- - Static-analysis gotcha: when grepping scripts for \"does X call configure-vso-kubernetes-auth.sh\", must exclude comment lines (`grep -vE ':[0-9]+:[[:space:]]*#'` on `grep -n` multi-file output) — `scripts/setup-vso-cluster.sh` has multiple explanatory comments referencing the script name for migration-compatibility context, which are not invocations.",
+              "- - Live-verified end to end: `make configure-vso-jwt-auth` and `make configure-vso-auth` both idempotently configure `auth/jwt-vso` in the real kind-vault-lab cluster with `bound_audiences=[vault]`, `bound_subject=system:serviceaccount:vso-demo:vso-demo`, `role_type=jwt`, and no `token_reviewer_jwt` — matching task 04's script behavior exactly.",
+              "- - All 14 test suites under `scripts/tests/` (13 pre-existing + the new one) pass after this change."
+            ],
+            "filesChanged": [
+              "Makefile",
+              "scripts/tests/test-makefile-vso-jwt-auth-validation.sh (new)"
+            ],
+            "blockers": [
+              "none — all acceptance/validation criteria for task 07 met. Task 08 (verify-two-cluster.sh JWT checks) and task 10 (docs/deck prose updates) are the remaining downstream dependents."
+            ],
+            "timestamp": "2026-07-10T09:34:35.120Z"
+          },
+          "toolUsage": {
+            "read": 0,
+            "write": 1,
+            "edit": 2,
+            "bash": 22,
+            "other": 0
+          },
+          "outputPreview": "## REFLECTION\nSUMMARY: Switched the Makefile's default two-cluster setup path to JWT/OIDC auth: added a `configure-vso-jwt-auth` target, made `configure-vso-auth` a compatibility alias that depends on it, and updated `setup` to call `scripts/configure-vso-jwt-auth.sh` (not `configure-vso-kubernetes-auth.sh`) before `apply-vso-demo.sh`; added a 14-assertion static validation test suite and live-verified both targets against the real two-cluster lab.\nFILES: Makefile, scripts/tests/test-makefile-vs\n... (truncated)",
+          "commitMessages": [
+            "refactor(vso-cluster):",
+            "feat:",
+            "feat:",
+            "feat:",
+            "docs:",
+            "feat:",
+            "refactor(vso-cluster):",
+            "feat:",
+            "feat:",
+            "feat:"
+          ],
+          "commitSummary": "refactor(vso-cluster):; feat:; feat: (+2 more); feat:; refactor(vso-cluster):; feat: (+2 more)"
+        },
+        "08": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:32:01.844Z",
+          "completedAt": "2026-07-10T09:38:37.745Z",
+          "durationMs": 360268,
+          "reflection": {
+            "taskId": "08",
+            "title": "update-two-cluster-verification",
+            "summary": "Updated `scripts/verify-two-cluster.sh`'s auth section to authenticate via `auth/jwt-vso` (JWT/OIDC) with a positive `vso-demo`/audience-`vault` login, mandatory wrong-audience and wrong-service-account negative logins, and a strict claim-binding role review, plus an updated final summary; updated its static test suite to match, and verified everything live end-to-end.",
+            "keyLearnings": [
+              "- Negative-login pattern under `set -euo pipefail`: `if kubectl_vault exec ... vault write ... jwt=\"${WRONG_JWT}\" >/dev/null 2>&1; then fail_section ...; fi` — commands used as an `if` condition are exempt from `set -e`, so this correctly treats \"login unexpectedly succeeded\" as the failure branch without needing `|| true` tricks.",
+              "- Role/config strict-binding check reads `auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}` via `vault read -format=json | jq` and compares `bound_audiences`/`bound_subject` exactly against `${VSO_JWT_AUDIENCE}` and `system:serviceaccount:${VSO_NAMESPACE}:vso-demo` — proves the config, not just that a role exists.",
+              "- All minted JWT shell variables (`VSO_SA_JWT`, `WRONG_AUD_JWT`, `WRONG_SA_JWT`) are `unset` right after use and never echoed directly, per the \"don't log full JWT values\" requirement; only Vault's own login response is ever printed on failure.",
+              "- Task 07 (Makefile switch to `configure-vso-jwt-auth.sh` as default) had already landed in the working tree by the time this task ran even though it wasn't in this task's dependency list — worth checking `git log` before assuming a stale baseline in multi-task pipelines.",
+              "- Live-verified against the real two-cluster kind lab: both `bash scripts/verify-two-cluster.sh` and `make verify-two-cluster` pass all 7 sections including both negative auth checks; baseline secret (`larry`) confirmed restored after rotation. All 12 `scripts/tests/test-*.sh` suites (35 assertions in this one) pass with zero regressions."
+            ],
+            "filesChanged": [
+              "scripts/verify-two-cluster.sh",
+              "scripts/tests/test-verify-two-cluster-validation.sh",
+              "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+            ],
+            "blockers": [
+              "none — all acceptance/validation criteria for task 08 met (bash -n; static assertions for `auth/jwt-vso/login`",
+              "wrong-audience/wrong-SA negative paths",
+              "no JWT leakage; live e2e run with all auth/sync/rotation sections passing and baseline restored)."
+            ],
+            "timestamp": "2026-07-10T09:38:02.200Z"
+          },
+          "toolUsage": {
+            "read": 3,
+            "write": 0,
+            "edit": 5,
+            "bash": 22,
+            "other": 0
+          },
+          "outputPreview": "Staged the two changed files for this task.\n\n## REFLECTION\nSUMMARY: Updated `scripts/verify-two-cluster.sh`'s auth section to authenticate via `auth/jwt-vso` (JWT/OIDC) with a positive `vso-demo`/audience-`vault` login, mandatory wrong-audience and wrong-service-account negative logins, and a strict claim-binding role review, plus an updated final summary; updated its static test suite to match, and verified everything live end-to-end.\nFILES: scripts/verify-two-cluster.sh, scripts/tests/test-ver\n... (truncated)",
+          "commitMessages": [
+            "feat:",
+            "refactor(vso-cluster):",
+            "feat:",
+            "feat:",
+            "feat:",
+            "feat(verify-two-cluster):",
+            "feat:",
+            "refactor(vso-cluster):",
+            "feat:",
+            "feat:"
+          ],
+          "commitSummary": "feat:; refactor(vso-cluster):; feat: (+2 more); feat(verify-two-cluster):; feat:; refactor(vso-cluster): (+2 more)"
+        },
+        "09": {
+          "status": "completed",
+          "retries": 0,
+          "startedAt": "2026-07-10T09:38:37.748Z",
+          "completedAt": "2026-07-10T09:46:27.005Z",
+          "durationMs": 397992,
+          "reflection": {
+            "taskId": "09",
+            "title": "update-validation-tests",
+            "summary": "Verified that tasks 04/05/06/07/08 had already brought the entire fast validation suite (13 `scripts/tests/test-*.sh` files) into alignment with the new JWT/OIDC default auth path; added one missing \"idempotent intent\" assertion to `test-configure-vso-jwt-auth-validation.sh` and confirmed zero failures/no stale TokenReview-as-default wording across the whole suite.",
+            "keyLearnings": [
+              "- Because each prior task's spec required updating its own test file alongside its script change, essentially all of task 09's nominal deliverables (`test-configure-vso-jwt-auth-validation.sh`, `test-apply-vso-demo-validation.sh`, `test-setup-vso-cluster-validation.sh`, `test-verify-two-cluster-validation.sh`) were already complete and correct by the time this task ran — task 09 in this run was primarily a verification pass plus one small gap fill (idempotent-enable-guard assertion, now 21/21 in that file).",
+              "- Scope boundary: `vso-demo.sh` (root demo narration script) and `presenterm/vso.md` deck content belong explicitly to task 10 (`update-demo-scripts-docs-and-deck`), not task 09. `vso-demo.sh` still narrates the old TokenReview/`auth/${VSO_AUTH_MOUNT}` path today — this is a known, deliberately deferred gap for task 10, not a task 09 regression, since `test-vso-demo-validation.sh` only asserts the variable name generically (no hardcoded stale text) and doesn't need a task-09 fix.",
+              "- Tasks 09 and 10 have no `depends_on` relationship and run concurrently in the same working tree — confirmed live via `.ralpi/progress.json` showing task 10 `in_progress` with uncommitted edits to `README.md`/`PODMAN_MIGRATION.md` while this task ran. Committed only the specific files changed here (`git add <files>`, not `-A`) to avoid capturing another in-flight task's work.",
+              "- All 13 `scripts/tests/test-*.sh` suites pass (186 total assertions), with no test expecting `auth/kubernetes-vso` as the default VSO path and no test depending on a default reviewer JWT — both are correctly gated behind `ENABLE_TOKEN_REVIEWER_AUTH=1`/kept as legacy-compat only."
+            ],
+            "filesChanged": [
+              "scripts/tests/test-configure-vso-jwt-auth-validation.sh",
+              "tasks/vso-jwt-oidc-auth/README.md",
+              "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
+            ],
+            "blockers": [
+              "none — all acceptance/validation criteria for task 09 met (fast validation suite passes fully",
+              "JWT role-binding tests fail without `bound_audiences`/`bound_subject`",
+              "VaultAuth regression to `method: kubernetes` is caught). Task 10's live update to `vso-demo.sh`/`presenterm/vso.md` (in progress concurrently) is the next dependent and was intentionally left untouched."
+            ],
+            "timestamp": "2026-07-10T09:45:15.822Z"
+          },
+          "toolUsage": {
+            "read": 7,
+            "write": 0,
+            "edit": 5,
+            "bash": 41,
+            "other": 0
+          },
+          "outputPreview": "All 13 fast validation suites pass with zero failures, and the commit is in place.\n\n## REFLECTION\nSUMMARY: Verified that tasks 04/05/06/07/08 had already brought the entire fast validation suite (13 `scripts/tests/test-*.sh` files) into alignment with the new JWT/OIDC default auth path; added one missing \"idempotent intent\" assertion to `test-configure-vso-jwt-auth-validation.sh` and confirmed zero failures/no stale TokenReview-as-default wording across the whole suite.\n\nFILES: scripts/tests/tes\n... (truncated)",
+          "commitMessages": [
+            "test(vso-jwt-oidc-auth):",
+            "feat(verify-two-cluster):",
+            "feat:",
+            "refactor(vso-cluster):",
+            "feat:",
+            "test(vso-jwt-oidc-auth):",
+            "feat(verify-two-cluster):",
+            "feat:",
+            "refactor(vso-cluster):",
+            "feat:"
+          ],
+          "commitSummary": "test(vso-jwt-oidc-auth):; feat(verify-two-cluster):; feat: (+2 more); test(vso-jwt-oidc-auth):; feat(verify-two-cluster):; feat: (+2 more)"
         }
       },
       "startedAt": "2026-07-10T08:59:33.273Z",
-      "lastUpdatedAt": "2026-07-10T09:00:10.604Z",
+      "lastUpdatedAt": "2026-07-11T00:55:26.615Z",
       "paused": false
     }
   }

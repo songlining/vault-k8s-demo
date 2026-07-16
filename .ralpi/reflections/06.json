@@ -1,20 +1,20 @@
 {
   "taskId": "06",
-  "title": "refactor-vso-cluster-setup",
-  "summary": "Created `scripts/setup-vso-cluster.sh`, a context-aware script that installs the Vault Secrets Operator, creates the `vso-demo` namespace with `vso-demo`/`vault-token-reviewer` service accounts, and grants TokenReview RBAC (`system:auth-delegator`) — all scoped exclusively to `VSO_CONTEXT` (`kind-vso-lab`) via the shared `kubectl_vso`/`helm_vso` wrappers, with no Vault auth config or VSO CRDs applied. Verified live end-to-end against real Podman-backed kind clusters.",
+  "title": "switch-vso-vaultauth-to-jwt",
+  "summary": "Switched scripts/apply-vso-demo.sh's VaultAuth manifest from Kubernetes auth (method: kubernetes, mount: kubernetes-vso) to JWT/OIDC auth (method: jwt, mount: jwt-vso), with jwt.role/serviceAccount/audiences/tokenExpirationSeconds fields, and updated its static validation test suite; verified live against the two-cluster kind lab that VaultAuth becomes Ready and VaultStaticSecret syncs correctly.",
   "keyLearnings": [
-    "- Followed the `--check-only` pattern established by `scripts/create-clusters.sh` (task 02): validates `require_commands kubectl helm` and `require_context \"$VSO_CONTEXT\"` before doing any real work, and exits early with `--check-only` for safe testing.",
-    "- Only requires `VSO_CONTEXT` to exist (not `require_contexts`, which checks both) — this script's job is VSO-cluster-only setup, so it should not fail if the Vault cluster isn't up yet.",
-    "- RBAC choice: bound `vault-token-reviewer` SA to the built-in `system:auth-delegator` ClusterRole (same pattern `create_vault.sh` used for the Vault SA itself) — this grants both TokenReview and SubjectAccessReview, the standard binding for Kubernetes-auth reviewer identities. Binding name: `vault-token-reviewer-auth-delegator`.",
-    "- Reused all naming/constants from `scripts/lib/two-cluster-env.sh` (task 03): `VSO_OPERATOR_NAMESPACE=vault-secrets-operator-system`, `VSO_NAMESPACE=vso-demo`, `VSO_CHART_VERSION=1.4.0`, `VAULT_TOKEN_REVIEWER_SA=vault-token-reviewer`. No new env vars introduced.",
-    "- Deliberately does NOT configure `auth/kubernetes-vso` in Vault or apply `VaultConnection`/`VaultAuth`/`VaultStaticSecret` CRDs — that's explicitly deferred to later tasks (07/08) per the task notes, keeping this script pure cluster/RBAC scaffolding.",
-    "- Verified live: script is idempotent (rerun shows `unchanged`/upgrade to revision 2 without errors), never reads or mutates the caller's current kubectl context (tested by running with `current-context=kind-vault-lab` and confirming it stays unchanged and VSO still installs correctly in `kind-vso-lab`), and `kind-vault-lab` has no `vault-secrets-operator-system` or `vso-demo` namespace after the run.",
-    "- A sibling script `scripts/setup-vault-cluster.sh` (untracked, presumably from a parallel task 04/05 run) already exists with matching conventions/comments referencing this script by name — no naming conflicts.",
-    "- Test script includes a regression guard: greps the script for any bare `kubectl`/`helm` invocation not going through `kubectl_vso`/`helm_vso` (watch for macOS/BSD grep needing `[[:space:]]` instead of `\\s`, and anchoring `^[0-9]+:` after `grep -n` line-number prefixes when filtering comment lines)."
+    "- Confirmed exact CRD field names live via `kubectl explain vaultauth.spec --recursive`: jwt.{audiences ([]string),role,secretRef,serviceAccount,tokenExpirationSeconds}. No token_reviewer_jwt-equivalent exists under jwt: -- VSO's JWT method uses the pod's own projected ServiceAccount token via jwt.serviceAccount, no stored reviewer credential anywhere.",
+    "- Test isolation trick: to assert the old `kubernetes:` stanza is absent, scope the check to just the VaultAuth manifest block (awk '/^kind: VaultAuth$/,/^---$/'), not the whole file -- the file's header comments legitimately still mention auth/kubernetes-vso for historical/migration context.",
+    "- grep -qF gotcha: a needle starting with '-' (e.g. '- ${VSO_JWT_AUDIENCE}') is misparsed as a flag (\"invalid option --\"). Split into two separate asserts instead of matching the YAML list-item dash literal.",
+    "- Makefile (`make setup`/`configure-vso-auth`/`vso-apply`) still calls scripts/configure-vso-kubernetes-auth.sh, not configure-vso-jwt-auth.sh -- that switch and verify-two-cluster.sh's JWT-specific proofs are explicitly scoped to tasks 07 and 08, not 06. Both auth/jwt-vso and auth/kubernetes-vso coexist on the live cluster; only jwt-vso is now exercised by apply-vso-demo.sh.",
+    "- Live-verified end to end on the real two-cluster lab: VaultAuth Ready/Healthy with method:jwt mount:jwt-vso; VaultStaticSecret SYNCED/HEALTHY/READY=True; native secret synced with baseline value; app pod Ready. All 12 test suites in scripts/tests/ still pass (25/25 in the updated suite)."
   ],
   "filesChanged": [
-    "scripts/setup-vso-cluster.sh (created)",
-    "scripts/tests/test-setup-vso-cluster-validation.sh (created)"
+    "scripts/apply-vso-demo.sh",
+    "scripts/tests/test-apply-vso-demo-validation.sh"
   ],
-  "timestamp": "2026-07-10T04:20:35.380Z"
+  "blockers": [
+    "none -- all acceptance/validation criteria for task 06 met. Downstream tasks 07 (Makefile/setup flow) and 08 (verify-two-cluster.sh JWT checks) are the next dependents and still need to switch make setup off configure-vso-kubernetes-auth.sh."
+  ],
+  "timestamp": "2026-07-10T09:28:50.108Z"
 }

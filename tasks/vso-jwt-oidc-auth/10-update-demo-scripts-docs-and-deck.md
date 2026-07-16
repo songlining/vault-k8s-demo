@@ -6,6 +6,7 @@ meta:
   priority: P2
   depends_on: [vso-jwt-oidc-auth-07, vso-jwt-oidc-auth-08]
   tags: [implementation, tests-required]
+  timeout: 15m
 
 objective:
 
@@ -48,8 +49,18 @@ validation:
 
 - Run relevant docs/demo validation tests.
 - Review README and deck manually for stale TokenReview-as-default language.
-- Run presenterm visual validation and inspect diagram slides via screenshot or capture.
+- Live presenterm visual validation (Ctrl-E, screenshots) is deferred to task 11.
+  Do not attempt live presenterm rendering from this task.
 
 notes:
 
 - It is acceptable to mention TokenReview only as a previous/demo comparison path, not as the default production-oriented approach.
+- **Never invoke `presenterm` directly, via `script -q ... presenterm ...`, or with
+  `--export-html` / `-x -E` from a non-interactive shell.** presenterm requires a
+  real PTY; without one it hangs indefinitely (it does not fail fast) instead of
+  erroring, which will stall the whole task/agent loop for hours. This task's
+  static tests (`scripts/tests/test-vso-deck-validation.sh`) intentionally never
+  launch presenterm for this reason. If any live rendering check is genuinely
+  needed here, use the tmux-backed validator described in
+  `~/work/hashicorp/local_skills/presenterm-demo-decks/SKILL.md`
+  (`scripts/validate-deck-visual.sh`), never a bare `script`/`export-html`/`-x -E` invocation.

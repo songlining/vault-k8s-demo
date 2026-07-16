@@ -1,18 +1,23 @@
 {
   "taskId": "01",
-  "title": "audit-single-cluster-assumptions",
-  "summary": "Audited every setup script, Make target, manifest, and doc for single-cluster assumptions in the Vault/VSO demo and wrote a categorized audit at `docs/vso-two-cluster-audit.md`, mapping each finding to the specific downstream task (02–12) responsible for fixing it.",
+  "title": "spike-oidc-discovery-and-jwks",
+  "summary": "Spiked VSO cluster JWT issuer/JWKS discovery against the live two-cluster kind lab, proved reachability from the Vault cluster, and documented the decision to use `jwks_url` (not `oidc_discovery_url`) for `auth/jwt-vso`, plus a required RBAC fix for anonymous discovery/JWKS access.",
   "keyLearnings": [
-    "- The single hard blocker for the migration is `create_vault.sh`'s VSO `VaultConnection.spec.address: http://vault.${NAMESPACE}.svc.cluster.local:8200` — this in-cluster DNS name only resolves inside kind-vault-lab and must become the external address (task 05/06/08).",
-    "- Only one Kubernetes auth mount (`auth/kubernetes`) exists today, configured against the Vault cluster's own API server via `$KUBERNETES_SERVICE_HOST/PORT` inside a `kubectl exec` into the Vault pod. The `vso-demo` role is currently bound to this same-cluster mount — it must move to a new `auth/kubernetes-vso` mount configured against the VSO cluster's API server (task 07). The existing `auth/kubernetes` mount and its `vault-demo`/`otel-vault-metrics` roles must NOT be touched — they're intentionally out of scope (Agent Injector + OTel demo paths stay entirely in the Vault cluster).",
-    "- `vso-demo.sh`, `demo.sh`, `presenterm/vso.md`, and `Makefile` targets all issue `kubectl` with zero `--context` flags — every occurrence needs `VAULT_CONTEXT`/`VSO_CONTEXT` split (tasks 03, 09, 10, 12). `demo.sh` (Agent Injector demo) is explicitly out of scope for context-splitting.",
-    "- No `make verify-two-cluster` target exists yet; `verify`/`vso-verify` only ever check one context today (task 11 must add the new target).",
-    "- README's VSO architecture diagram and `PODMAN_MIGRATION.md` both depict/describe a single cluster and need full rewrites, not incremental edits (task 12).",
-    "- `docs/vso-demo-design.md` exists but wasn't audited line-by-line in this task — flagged for task 12 follow-up.",
-    "- No `memory` tool was available in this session's toolset; learnings are captured in the audit doc itself and this reflection for downstream tasks to reference."
+    "- Default kind `iss` claim (`https://kubernetes.default.svc.cluster.local`) is cluster-internal and unsafe/unreachable cross-cluster (it resolves to the *wrong* cluster's own API server from the other kind cluster). The discovery doc's self-reported `jwks_uri` is a Podman-bridge IP, also not reliably reachable.",
+    "- Decision locked: `auth/jwt-vso` config should use `jwks_url=https://host.containers.internal:6444/openid/v1/jwks` + `jwks_ca_pem=<VSO CA>` + `bound_issuer=<actual iss claim>` (bound_issuer is a string compare only, no reachability needed). Task 02 (kind issuer reconfiguration) is therefore NOT required.",
+    "- New required gap surfaced: default kubeadm/kind RBAC (`system:public-info-viewer`) does not grant unauthenticated access to `/.well-known/openid-configuration` or `/openid/v1/jwks`. Applied `oidc-discovery-reader` ClusterRole/ClusterRoleBinding (granting `system:unauthenticated` GET on those two nonResourceURLs) directly to `kind-vso-lab` for this spike's evidence — it is NOT yet captured in any script and must be added idempotently to `scripts/setup-vso-cluster.sh` by task 04 or 05, or it's lost on cluster recreation.",
+    "- Practical tooling note: Vault's container image has no `curl`; busybox `wget` needs `SSL_CERT_FILE=<path>` (not `--ca-certificate`) for custom CA trust when testing TLS reachability via `kubectl exec`.",
+    "- VSO cluster CA for cross-cluster trust should be pulled from local kubeconfig `certificate-authority-data` (same pattern as `scripts/configure-vso-kubernetes-auth.sh`), not extracted from inside a pod."
   ],
   "filesChanged": [
-    "docs/vso-two-cluster-audit.md (created)"
+    "docs/vso-jwt-oidc-auth-spike-01.md (new)",
+    "docs/vso-jwt-oidc-auth-plan.md (Phase 1 updated with decision summary/link)",
+    "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (new",
+    "memory notes)"
   ],
-  "timestamp": "2026-07-10T04:08:26.105Z"
+  "blockers": [
+    "none — all acceptance/validation criteria for this spike task were met and re-run successfully. The one open follow-up (formalizing the `oidc-discovery-reader` RBAC grant in `scripts/setup-vso-cluster.sh`) is explicitly flagged for tasks 04/05",
+    "not a blocker for task 01 itself."
+  ],
+  "timestamp": "2026-07-10T09:05:31.368Z"
 }

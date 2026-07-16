@@ -1,0 +1,390 @@
+=== BEFORE STEP 1 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 2 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 3 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 4 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 5 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 6 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 7 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 8 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 9 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 10 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 11 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 12 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 13 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 14 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 15 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 16 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 17 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯
+
+=== BEFORE STEP 18 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 19 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 20 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 21 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 22 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 23 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dx '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 24 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 25 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ c/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 26 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ c/d Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 27 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ c/d Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 28 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ c/d Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 29 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ c/d Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+=== BEFORE STEP 30 footer=unknown ===
+d%
+cd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ dxcd '/Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+zsh: command not found: dxcd
+
+vault-k8s-demo on  main [✘!?⇡]
+❯ c/d Users/larry.song/work/hashicorp/vault-k8s-demo' && presenterm -x presenterm/vso.md
+

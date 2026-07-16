@@ -15,8 +15,8 @@ Tasks
 - [x] 07 — update-make-targets-and-setup-flow → `07-update-make-targets-and-setup-flow.md`
 - [x] 08 — update-two-cluster-verification → `08-update-two-cluster-verification.md`
 - [x] 09 — update-validation-tests → `09-update-validation-tests.md`
-- [~] 10 — update-demo-scripts-docs-and-deck → `10-update-demo-scripts-docs-and-deck.md`
-- [ ] 11 — run-end-to-end-validation → `11-run-end-to-end-validation.md`
+- [x] 10 — update-demo-scripts-docs-and-deck → `10-update-demo-scripts-docs-and-deck.md`
+- [!] 11 — run-end-to-end-validation → `11-run-end-to-end-validation.md`
 
 Dependencies
 

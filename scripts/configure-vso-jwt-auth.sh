@@ -170,9 +170,29 @@ echo "==> Enabling auth/${VSO_JWT_AUTH_MOUNT} in context '${VAULT_CONTEXT}' (if 
 if kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault auth list 2>/dev/null | grep -q "^${VSO_JWT_AUTH_MOUNT}/"; then
   echo "    auth/${VSO_JWT_AUTH_MOUNT} already enabled. Skipping enable (config below is still refreshed)."
 else
-  kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- \
+  # Guard against a TOCTOU race: if another process (e.g. a concurrent
+  # setup/demo run) enables auth/${VSO_JWT_AUTH_MOUNT} between the check
+  # above and this call, `vault auth enable` fails with "path is already in
+  # use" even though the desired end state (mount enabled) is already true.
+  # Treat that specific error as success instead of a hard failure so this
+  # step stays truly idempotent under concurrency.
+  set +e
+  ENABLE_OUTPUT=$(kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- \
     vault auth enable -path="${VSO_JWT_AUTH_MOUNT}" -description="JWT/OIDC auth validated directly against the VSO cluster (${VSO_CONTEXT}) JWKS -- no TokenReview, no reviewer JWT" \
-    jwt
+    jwt 2>&1)
+  ENABLE_EXIT=$?
+  set -e
+  if [ "$ENABLE_EXIT" -ne 0 ]; then
+    if printf '%s' "$ENABLE_OUTPUT" | grep -qi 'path is already in use'; then
+      echo "    auth/${VSO_JWT_AUTH_MOUNT} was enabled concurrently between the check and this call. Continuing (idempotent)."
+    else
+      printf '%s\n' "$ENABLE_OUTPUT" >&2
+      echo "ERROR: failed to enable auth/${VSO_JWT_AUTH_MOUNT}." >&2
+      exit 1
+    fi
+  else
+    printf '%s\n' "$ENABLE_OUTPUT"
+  fi
 fi
 
 # --- Configure auth/${VSO_JWT_AUTH_MOUNT}/config -----------------------------

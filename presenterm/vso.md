@@ -369,7 +369,9 @@ Seed Vault (in the Vault cluster) with the original value so rotation starts
 from a known baseline:
 
 ```bash +exec
-kubectl --context kind-vault-lab exec vault-0 -n default -- vault kv put kv-v2/vault-demo/mysecret username=larry
+kubectl --context kind-vault-lab exec vault-0 -n default -- \
+  vault kv put kv-v2/vault-demo/mysecret username=larry >/dev/null \
+  && echo '  -> wrote username=larry to kv-v2/vault-demo/mysecret'
 ```
 
 Wait for VSO (in the VSO cluster) to sync the baseline value into the
@@ -399,8 +401,15 @@ kubectl --context kind-vso-lab get secret vso-demo-mysecret -n vso-demo -o jsonp
 Update the value in Vault (Vault cluster):
 
 ```bash +exec
-kubectl --context kind-vault-lab exec vault-0 -n default -- vault kv put kv-v2/vault-demo/mysecret username=larry-rotated-1
+kubectl --context kind-vault-lab exec vault-0 -n default -- \
+  vault kv put kv-v2/vault-demo/mysecret username=larry-rotated-1 >/dev/null \
+  && echo '  -> wrote username=larry-rotated-1 to kv-v2/vault-demo/mysecret'
 ```
+
+<!-- end_slide -->
+
+7b — Rotate the value in Vault (cont.)
+=====================================
 
 VSO reconciles within `refreshAfter` (30s). Poll the Secret in the VSO
 cluster until it flips:
@@ -425,7 +434,9 @@ echo 'ERROR: Secret did not sync to larry-rotated-1' >&2; exit 1
 Reset the secret back to its original value (Vault cluster):
 
 ```bash +exec
-kubectl --context kind-vault-lab exec vault-0 -n default -- vault kv put kv-v2/vault-demo/mysecret username=larry
+kubectl --context kind-vault-lab exec vault-0 -n default -- \
+  vault kv put kv-v2/vault-demo/mysecret username=larry >/dev/null \
+  && echo '  -> wrote username=larry to kv-v2/vault-demo/mysecret'
 ```
 
 Wait for the reset to sync (VSO cluster) so the next demo starts clean:

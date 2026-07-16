@@ -1,0 +1,74 @@
+
+                                                                                                      6 — Set up cross-cluster Kubernetes auth
+
+                    This is the customer-facing setup step: configure a Vault auth method in the Vault cluster that validates service account JWTs against the VSO cluster's API server.
+
+                                                                                                   cd "$(git rev-parse --show-toplevel)"
+                                                                                                   bash scripts/configure-vso-kubernetes-auth.sh
+
+                                                                                                 ——————————————————— [finished] ———————————————————
+
+                                                  ==> Configuring Vault Kubernetes auth against the VSO cluster
+                                                      Vault cluster (auth host): kind-vault-lab
+                                                      VSO cluster (validated):   kind-vso-lab
+                                                      Auth mount:                auth/kubernetes-vso
+
+                                                  ==> Reading API server CA for context 'kind-vso-lab'...
+                                                      VSO API address: https://host.containers.internal:6444
+                                                      VSO CA resolved from cluster entry 'kind-vso-lab'.
+                                                  ==> Minting reviewer JWT for service account 'vault-token-reviewer' (ttl 8760h)...
+                                                  ==> Enabling auth/kubernetes-vso in context 'kind-vault-lab' (if not already enabled)...
+                                                      auth/kubernetes-vso already enabled. Skipping enable (config below is still refreshed).
+                                                  ==> Writing auth/kubernetes-vso/config...
+                                                  Success! Data written to: auth/kubernetes-vso/config
+                                                  ==> Writing auth/kubernetes-vso/role/vso-demo...
+                                                  WARNING! The following warnings were returned from Vault:
+
+                                                    * Role vso-demo does not have an audience configured. While audiences are
+                                                    not required, consider specifying one if your use case would benefit from
+                                                    additional JWT claim verification.
+
+                                                  ==> Verifying configuration...
+                                                  Path               Type          Accessor                    Description
+                                                  Version
+                                                  ----               ----          --------                    -----------
+                                                  -------
+                                                  kubernetes-vso/    kubernetes    auth_kubernetes_0fb43702    Kubernetes auth validated against the VSO cluster (kind-vso-lab) API server    n/a
+                                                  kubernetes/        kubernetes    auth_kubernetes_f6edd39c    n/a                                                                            n/a
+                                                  token/             token         auth_token_2cf0e5b9         token based credentials                                                        n/a
+
+                                                  Key                                         Value
+                                                  ---                                         -----
+                                                  alias_metadata                              map[]
+                                                  alias_name_source                           serviceaccount_name
+                                                  bound_service_account_names                 [vso-demo]
+                                                  bound_service_account_namespace_selector    n/a
+                                                  bound_service_account_namespaces            [vso-demo]
+                                                  policies                                    [mysecret]
+                                                  token_bound_cidrs                           []
+                                                  token_explicit_max_ttl                      0s
+                                                  token_max_ttl                               0s
+                                                  token_no_default_policy                     false
+                                                  token_num_uses                              0
+                                                  token_period                                0s
+                                                  token_policies                              [mysecret]
+                                                  token_ttl                                   1h
+                                                  token_type                                  default
+                                                  ttl                                         1h
+
+                                                  auth/kubernetes-vso is configured in context 'kind-vault-lab' against the VSO
+                                                  cluster's API server (https://host.containers.internal:6444), and role 'vso-demo' is bound to
+                                                  service account 'vso-demo/vso-demo' with policy 'mysecret'.
+
+                                                  Reviewer JWT expires in 8760h (demo-only; not auto-refreshed).
+                                                  Re-run this script to mint a fresh reviewer JWT before it expires.
+
+                    What that command does
+
+                       •  Reads the VSO cluster API server CA from kubeconfig.
+                       •  Mints a reviewer JWT for vso-demo/vault-token-reviewer in the VSO cluster.
+                       •  Enables/refreshes auth/kubernetes-vso in Vault without touching same-cluster auth/kubernetes.
+                       •  Writes auth/kubernetes-vso/config with the VSO API endpoint.
+                       •  Writes role vso-demo, bound only to service account vso-demo/vso-demo.
+
+                                                                                                                                                                                                                                            10 / 16

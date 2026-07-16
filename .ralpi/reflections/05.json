@@ -1,20 +1,22 @@
 {
   "taskId": "05",
-  "title": "expose-vault-cross-cluster",
-  "summary": "Implemented Vault cross-cluster exposure for the VSO two-cluster Podman demo: added an additive `vault-external` NodePort Service (port 8200 → nodePort 30820, matching the existing kind `extraPortMappings`) in `scripts/setup-vault-cluster.sh`, and created a reusable, diagnostic-rich connectivity-check script plus unit tests; validated live end-to-end against real `kind-vault-lab`/`kind-vso-lab` Podman-backed clusters.",
+  "title": "refactor-vso-cluster-setup",
+  "summary": "Refactored `scripts/setup-vso-cluster.sh` to make JWT/OIDC the default VSO auth path — removed default TokenReview reviewer SA/RBAC (now gated behind `ENABLE_TOKEN_REVIEWER_AUTH=1`), formalized the previously-ad-hoc `oidc-discovery-reader` ClusterRole/ClusterRoleBinding as a default resource, updated all comments/output, and extended the validation test suite with 6 new static assertions plus a live-cluster check.",
   "keyLearnings": [
-    "- `scripts/lib/two-cluster-env.sh` (from task 03) already pre-declared `VAULT_NODE_PORT=30820`/`VAULT_HOST_PORT=8200`/`VAULT_ADDR=http://host.containers.internal:8200`, and `scripts/kind/vault-lab-config.yaml.tmpl` already had the matching `extraPortMappings` — task 05's job was purely to create the actual NodePort Service using those pre-agreed values, which I did as a new `vault-external` Service (selector `app.kubernetes.io/instance=vault,app.kubernetes.io/name=vault,component=server`, matching the vault-0 pod's real labels). This is additive and does not touch the Helm chart's own `vault`/`vault-internal` ClusterIP Services, so same-cluster consumers (Agent Injector, OTel) are unaffected.",
-    "- Discovered tasks 06 and 07 (`scripts/setup-vso-cluster.sh`, `scripts/configure-vso-kubernetes-auth.sh`) were already committed ahead of 05 by parallel/out-of-order execution — confirmed neither depends on the NodePort Service created here (07 handles the reverse direction: Vault→VSO API server auth via `VSO_API_ADDR`/port 6444), so no conflicts.",
-    "- `scripts/check-vault-connectivity.sh` runs a one-shot `kubectl run --rm -i --restart=Never --image=curlimages/curl` pod in `VSO_CONTEXT`, curls `${VAULT_ADDR}/v1/sys/health`, and treats HTTP codes `200|429|472|473|501|503` as connectivity success (Vault's health endpoint intentionally returns non-200 for sealed/standby/uninitialized states — this is a reachability check, not a readiness check). On `HTTP_CODE=000` (curl couldn't connect at all) it prints Podman/kind networking troubleshooting steps (host gateway resolution, extraPortMappings, missing `vault-external` Service, Podman machine not running).",
-    "- Verified live: `curl http://localhost:8200/v1/sys/health` from the host returns 200, and `scripts/check-vault-connectivity.sh` run with the real `VAULT_ADDR` returns `OK: reached Vault ... (HTTP 200)` from inside a pod in `kind-vso-lab`; also verified the failure path prints the expected diagnostics when pointed at a bad port.",
-    "- Both `scripts/setup-vault-cluster.sh` and `scripts/check-vault-connectivity.sh` are idempotent and safe to re-run against the already-live demo clusters (confirmed via repeated runs).",
-    "- Downstream tasks (VSO CRDs / VaultConnection in task 08) should use `VAULT_ADDR` from `scripts/lib/two-cluster-env.sh` as-is — it's already centralized and this task's Service creation makes it actually resolvable."
+    "- - Decision: removed reviewer SA/RBAC from the default path (per the plan's \"Recommended\" option) rather than deleting it entirely — gated behind `ENABLE_TOKEN_REVIEWER_AUTH=1` so `scripts/configure-vso-kubernetes-auth.sh` (the untouched legacy `auth/kubernetes-vso` path) can still be run standalone for comparison if that flag is set first.",
+    "- - The `oidc-discovery-reader` ClusterRole/ClusterRoleBinding (granting `system:unauthenticated` GET on `/.well-known/openid-configuration` and `/openid/v1/jwks`) was formalized here as explicitly flagged by task 01/04's reflections — it now survives cluster recreate instead of being an ad hoc live-cluster-only fix.",
+    "- - The script does not delete pre-existing `vault-token-reviewer` SAs from prior runs/older setups — only *creation* is gated, not cleanup; a live cluster in this environment still had one from before this task, confirmed harmless and noted informationally by the test rather than failing.",
+    "- - Test-writing pattern: verifying \"resource X only created inside guard Y\" via line-number ordering (`grep -n` + numeric comparison against the guard's `if` line) rather than a nested-parsing approach — reusable pattern for future gated-resource tests.",
+    "- - Confirmed via reading tasks 06/07/08/10 that `scripts/apply-vso-demo.sh` (VaultAuth method switch), Makefile targets, `verify-two-cluster.sh`, and all docs/README/deck updates are explicitly out of scope for task 05 and remain untouched/pending."
   ],
   "filesChanged": [
-    "scripts/setup-vault-cluster.sh (modified)",
-    "scripts/check-vault-connectivity.sh (created)",
-    "scripts/tests/test-check-vault-connectivity-validation.sh (created)",
-    "scripts/tests/test-vault-cross-cluster-exposure-validation.sh (created)"
+    "scripts/setup-vso-cluster.sh",
+    "scripts/tests/test-setup-vso-cluster-validation.sh",
+    "/Users/larry.song/.pi/agent/memory/vso-jwt-oidc-auth.md (memory update)"
   ],
-  "timestamp": "2026-07-10T04:30:00.829Z"
+  "blockers": [
+    "none — all acceptance/validation criteria for task 05 met and verified live (bash -n; default run creates no reviewer SA; `ENABLE_TOKEN_REVIEWER_AUTH=1` run creates it; VSO operator Available; vso-demo namespace/SA present; oidc-discovery-reader present; all 12 repo test suites passing",
+    "including 12/12 in the updated test file)."
+  ],
+  "timestamp": "2026-07-10T09:31:32.116Z"
 }

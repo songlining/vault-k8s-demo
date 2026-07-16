@@ -1,0 +1,41 @@
+
+                                                                                                      6 — Set up cross-cluster Kubernetes auth
+
+                    This is the customer-facing setup step: configure a Vault auth method in the Vault cluster that validates service account JWTs against the VSO cluster's API server.
+
+                                                                                   set -euo pipefail
+                                                                                   [ -f scripts/configure-vso-kubernetes-auth.sh ] || cd ..
+                                                                                   bash scripts/configure-vso-kubernetes-auth.sh > /tmp/vso-auth-setup.out 2>&1
+                                                                                   awk '
+                                                                                     /^==> Configuring/ ||
+                                                                                     /^    Vault cluster/ ||
+                                                                                     /^    VSO cluster/ ||
+                                                                                     /^    Auth mount/ ||
+                                                                                     /^    VSO API address/ ||
+                                                                                     /^==> Minting reviewer JWT/ ||
+                                                                                     /^==> Writing auth\/kubernetes-vso/ ||
+                                                                                     /^auth\/kubernetes-vso is configured/ ||
+                                                                                     /^cluster.s API server/ ||
+                                                                                     /^service account/ ||
+                                                                                     /^Reviewer JWT expires/
+                                                                                   ' /tmp/vso-auth-setup.out
+
+                                                                                 —————————————————————————————————— [finished] ———————————————————————————————————
+
+                                                                             ==> Configuring Vault Kubernetes auth against the VSO cluster
+                                                                                 Vault cluster (auth host): kind-vault-lab
+                                                                                 VSO cluster (validated):   kind-vso-lab
+                                                                                 Auth mount:                auth/kubernetes-vso
+                                                                                 VSO API address: https://host.containers.internal:6444
+                                                                             ==> Minting reviewer JWT for service account 'vault-token-reviewer' (ttl 8760h)...
+                                                                             ==> Writing auth/kubernetes-vso/config...
+                                                                             ==> Writing auth/kubernetes-vso/role/vso-demo...
+                                                                             auth/kubernetes-vso is configured in context 'kind-vault-lab' against the VSO
+                                                                             cluster's API server (https://host.containers.internal:6444), and role 'vso-demo' is
+                                                                             bound to
+                                                                             service account 'vso-demo/vso-demo' with policy 'mysecret'.
+                                                                             Reviewer JWT expires in 8760h (demo-only; not auto-refreshed).
+
+                    Watch for the important asymmetry in the output: auth is hosted in kind-vault-lab, but configured against kind-vso-lab.
+
+                                                                                                                                                                                                                                            10 / 16

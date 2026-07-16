@@ -1,0 +1,562 @@
+=== BEFORE STEP 1 footer=unknown ===
+
+                                                                                                         Vault Secrets Operator (VSO) Demo
+                                                                                                 Sync Vault secrets into native Kubernetes Secrets
+
+                                                                                                    Larry Song — HashiCorp Solutions Engineering
+
+=== BEFORE STEP 2 footer=2 / 16 ===
+
+                    This guided flow demonstrates the Vault Secrets Operator: a cluster-wide operator that syncs Vault secrets into native Kubernetes Secret objects, running across two separate Podman-backed kind clusters —
+                    Vault in kind-vault-lab, VSO in kind-vso-lab.
+
+                    The customer problem
+
+                       •  Teams want Vault secrets, but their apps already consume native Kubernetes Secrets (envFrom, secretKeyRef, volume mounts).
+                       •  They do not want every workload to carry Vault-specific annotations or run a per-pod sidecar just to read a secret.
+                       •  They want secrets to stay in sync automatically when the source changes.
+                       •  Vault and the clusters that consume its secrets often live in different clusters — a central Vault serving many downstream clusters.
+
+                    What we will prove
+
+                       1. Vault runs only in the Vault cluster; VSO, its CRDs, and the consuming app run only in a separate VSO cluster.
+                       2. The Vault Secrets Operator is running cluster-wide in the VSO cluster.
+                       3. Three CRDs declare how to reach Vault, how to authenticate, and what to sync.
+                       4. A pod in the VSO cluster can reach Vault at its documented external address.
+                       5. Vault validates VSO-cluster service accounts through a dedicated auth/kubernetes-vso mount — a real cross-cluster TokenReview, not an in-cluster shortcut.
+                       6. A Vault KV secret is materialized as a native Kubernetes Secret in the VSO cluster.
+                       7. A plain pod consumes it with zero Vault configuration.
+                       8. The operator's Vault identity is least-privilege.
+                       9. Updating the value in Vault refreshes the Kubernetes Secret automatically.
+
+                                                                                                                                                                                                                                             2 / 16
+
+=== BEFORE STEP 3 footer=3 / 16 ===
+
+                                                                                                 1 — Architecture: two clusters, cross-cluster auth
+
+                    Vault runs in one cluster; VSO runs in another. VSO reaches Vault over the Podman host network, and Vault validates VSO's identity by calling back into the VSO cluster's own API server.
+
+                                                                               kind-vault-lab (VAULT_CONTEXT)              kind-vso-lab (VSO_CONTEXT)
+                                                                               ┌───────────────────────────────┐           ┌────────────────────────────────────┐
+                                                                               │ default/vault-0                │           │ vault-secrets-operator-system       │
+                                                                               │  auth/kubernetes-vso           │           │   VSO Controller (cluster-wide)     │
+                                                                               │    role vso-demo → policy      │           │        │ watches / reconciles       │
+                                                                               │    mysecret                    │           │ vso-demo ns                          │
+                                                                               │  kv-v2/vault-demo/mysecret     │           │   VaultConnection → VaultAuth →      │
+                                                                               │                                 │           │     VaultStaticSecret                │
+                                                                               │ NodePort → host.containers     │           │        │ syncs into                  │
+                                                                               │   .internal:8200 (VAULT_ADDR)  │           │   Secret: vso-demo-mysecret          │
+                                                                               └───────────────┬─────────────────┘           │        │ envFrom (standard K8s)      │
+                                                                                               │                             │   Pod: vso-demo-app (1/1, no        │
+                                                                                               │ (1) VaultConnection →        │        sidecar, no Vault config)    │
+                                                                                               │     VAULT_ADDR              └────────────────┬────────────────────┘
+                                                                                               │◄─────────────────────────────────────────────┘
+                                                                                               │ (2) VaultAuth login: SA JWT via auth/kubernetes-vso
+                                                                                               ▼
+                                                                                   Vault calls TokenReview against VSO_API_ADDR
+                                                                                   (the VSO cluster's own API server, via vault-token-reviewer SA)
+                                                                                               │ (3) on success: read kv-v2/vault-demo/mysecret
+                                                                                               ▼
+                                                                                   VSO writes/refreshes the native Secret every refreshAfter (30s)
+
+                                                                                                                                                                                                                                             3 / 16
+
+=== BEFORE STEP 4 footer=4 / 16 ===
+
+                                                                                                               1b — Step-by-step flow
+
+                                                                                      kind-vso-lab:  VaultConnection → VaultAuth → VaultStaticSecret   (CRDs)
+                                                                                             │  (1) VSO controller watches these CRDs
+                                                                                             ▼
+                                                                                      kind-vso-lab:  VSO Controller (vault-secrets-operator-system)
+                                                                                             │  (2) login with vso-demo SA JWT over auth/kubernetes-vso
+                                                                                             │      address: VAULT_ADDR (http://host.containers.internal:8200)
+                                                                                             ▼
+                                                                                      kind-vault-lab:  Vault (vault-0)
+                                                                                                   auth/kubernetes-vso · role vso-demo · policy mysecret
+                                                                                                   kv-v2/vault-demo/mysecret
+                                                                                             │  (3) Vault calls back into kind-vso-lab's API server
+                                                                                             │      (VSO_API_ADDR) to TokenReview the JWT
+                                                                                             │  (4) on success: writes / refreshes every 30s
+                                                                                             ▼
+                                                                                      kind-vso-lab:  Secret vso-demo-mysecret   (native K8s Secret)
+                                                                                             │  (5) envFrom — standard Kubernetes API
+                                                                                             ▼
+                                                                                      kind-vso-lab:  Pod vso-demo-app   (no Vault annotations, no sidecar)
+
+                    Unlike the Agent Injector (a sidecar per pod that writes a file), VSO runs once per cluster and turns Vault secrets into first-class Kubernetes Secrets any app can consume with zero Vault knowledge — and
+                    here, Vault itself lives in a separate cluster from every consumer.
+
+                                                                                                                                                                                                                                             4 / 16
+
+=== BEFORE STEP 5 footer=5 / 16 ===
+
+                                                                                                            2 — The operator is running
+
+                    The Vault Secrets Operator runs as a cluster-wide controller in the VSO cluster:
+
+                                                                                     kubectl --context kind-vso-lab get pods -n vault-secrets-operator-system
+
+                                                                                   ——————————————————————————————— [not started] ———————————————————————————————
+
+                    Key points
+
+                       •  One operator Deployment serves the whole (VSO) cluster.
+                       •  There is no per-application sidecar in this model.
+                       •  Vault itself is not installed here — it runs in the separate kind-vault-lab cluster.
+
+                                                                                                                                                                                                                                             5 / 16
+
+=== AFTER CTRL-E STEP 5 footer=5 / 16 ===
+
+                                                                                                            2 — The operator is running
+
+                    The Vault Secrets Operator runs as a cluster-wide controller in the VSO cluster:
+
+                                                                                     kubectl --context kind-vso-lab get pods -n vault-secrets-operator-system
+
+                                                                                   ———————————————————————————————— [finished] —————————————————————————————————
+
+                                                                             NAME                                                         READY   STATUS    RESTARTS
+                                                                             AGE
+                                                                             vault-secrets-operator-controller-manager-7895c4d48c-krj2s   2/2     Running   0
+                                                                             68m
+
+                    Key points
+
+                       •  One operator Deployment serves the whole (VSO) cluster.
+                       •  There is no per-application sidecar in this model.
+                       •  Vault itself is not installed here — it runs in the separate kind-vault-lab cluster.
+
+                                                                                                                                                                                                                                             5 / 16
+
+=== BEFORE STEP 6 footer=6 / 16 ===
+
+                                                                                                          3 — The CRDs that drive the sync
+
+                    Three declarative objects describe the whole pipeline, all in the VSO cluster:
+
+                                                                                            ┌──────────────────┬──────────────┬────────────────────────┐
+                                                                                            │ VaultConnection  │ VaultAuth    │ VaultStaticSecret      │
+                                                                                            ├──────────────────┼──────────────┼────────────────────────┤
+                                                                                            │ Where is Vault?  │ How login?   │ What secret to sync?   │
+                                                                                            └──────────────────┴──────────────┴────────────────────────┘
+
+                    Other VSO secret CRDs you can use: VaultDynamicSecret (dynamic leased creds, e.g. database users), VaultPKISecret (issued/renewed certs from Vault PKI), HCPVaultSecretsApp (sync from HCP Vault Secrets).
+                    This demo uses VaultStaticSecret because the source is an existing KV secret.
+
+                                                                            kubectl --context kind-vso-lab get vaultconnection,vaultauth,vaultstaticsecret -n vso-demo
+
+                                                                          ———————————————————————————————————————— [not started] ————————————————————————————————————————
+
+                                                                                                                                                                                                                                             6 / 16
+
+=== AFTER CTRL-E STEP 6 footer=6 / 16 ===
+
+                                                                                                          3 — The CRDs that drive the sync
+
+                    Three declarative objects describe the whole pipeline, all in the VSO cluster:
+
+                                                                                            ┌──────────────────┬──────────────┬────────────────────────┐
+                                                                                            │ VaultConnection  │ VaultAuth    │ VaultStaticSecret      │
+                                                                                            ├──────────────────┼──────────────┼────────────────────────┤
+                                                                                            │ Where is Vault?  │ How login?   │ What secret to sync?   │
+                                                                                            └──────────────────┴──────────────┴────────────────────────┘
+
+                    Other VSO secret CRDs you can use: VaultDynamicSecret (dynamic leased creds, e.g. database users), VaultPKISecret (issued/renewed certs from Vault PKI), HCPVaultSecretsApp (sync from HCP Vault Secrets).
+                    This demo uses VaultStaticSecret because the source is an existing KV secret.
+
+                                                                            kubectl --context kind-vso-lab get vaultconnection,vaultauth,vaultstaticsecret -n vso-demo
+
+                                                                          ————————————————————————————————————————— [finished] ——————————————————————————————————————————
+
+                                                                            NAME                                                        HEALTHY   READY   AGE
+                                                                            vaultconnection.secrets.hashicorp.com/vso-demo-connection   True      True    55m
+
+                                                                            NAME                                            HEALTHY   READY   AGE
+                                                                            vaultauth.secrets.hashicorp.com/vso-demo-auth   True      True    55m
+
+                                                                            NAME                                                        SYNCED   HEALTHY   READY   AGE
+                                                                            vaultstaticsecret.secrets.hashicorp.com/vso-demo-mysecret   True     True      True    55m
+
+                                                                                                                                                                                                                                             6 / 16
+
+=== BEFORE STEP 7 footer=7 / 16 ===
+
+                                                                                                      3b — What the VaultStaticSecret declares
+
+                    The VaultStaticSecret declares the Vault path and the destination Secret:
+
+                                       kubectl --context kind-vso-lab get vaultstaticsecret vso-demo-mysecret -n vso-demo -o jsonpath='{"  mount: "}{.spec.mount}{"\n  path: "}{.spec.path}{"\n  type:
+                                       "}{.spec.type}{"\n  refreshAfter: "}{.spec.refreshAfter}{"\n  destination: "}{.spec.destination.name}{"\n"}'
+
+                    —————————————————————————————————————————————————————————————————————————————————————————————— [not started] ———————————————————————————————————————————————————————————————————————————————————————————————
+
+                    And the VaultConnection declares the external address VSO uses to reach Vault in the other cluster (not an in-cluster DNS name):
+
+                                                              kubectl --context kind-vso-lab get vaultconnection vso-demo-connection -n vso-demo -o jsonpath='{.spec.address}{"\n"}'
+
+                                                            —————————————————————————————————————————————————————— [not started] ——————————————————————————————————————————————————————
+
+                    Key points
+
+                       •  VaultConnection: how to reach Vault — here, the host-level address http://host.containers.internal:8200 (VAULT_ADDR), since Vault lives in a different cluster.
+                       •  VaultAuth: uses the dedicated kubernetes-vso mount with role vso-demo, distinct from the same-cluster auth/kubernetes mount used by the Agent Injector demos.
+                       •  VaultStaticSecret: read kv-v2/vault-demo/mysecret, refresh every 30s, and materialize it as the native Secret vso-demo-mysecret.
+
+                                                                                                                                                                                                                                             7 / 16
+
+=== AFTER CTRL-E STEP 7 footer=7 / 16 ===
+
+                                                                                                      3b — What the VaultStaticSecret declares
+
+                    The VaultStaticSecret declares the Vault path and the destination Secret:
+
+                                       kubectl --context kind-vso-lab get vaultstaticsecret vso-demo-mysecret -n vso-demo -o jsonpath='{"  mount: "}{.spec.mount}{"\n  path: "}{.spec.path}{"\n  type:
+                                       "}{.spec.type}{"\n  refreshAfter: "}{.spec.refreshAfter}{"\n  destination: "}{.spec.destination.name}{"\n"}'
+
+                    ———————————————————————————————————————————————————————————————————————————————————————————————— [finished] ————————————————————————————————————————————————————————————————————————————————————————————————
+
+                                         mount: kv-v2
+                                         path: vault-demo/mysecret
+                                         type: kv-v2
+                                         refreshAfter: 30s
+                                         destination: vso-demo-mysecret
+
+                    And the VaultConnection declares the external address VSO uses to reach Vault in the other cluster (not an in-cluster DNS name):
+
+                                                              kubectl --context kind-vso-lab get vaultconnection vso-demo-connection -n vso-demo -o jsonpath='{.spec.address}{"\n"}'
+
+                                                            ——————————————————————————————————————————————————————— [finished] ————————————————————————————————————————————————————————
+
+                                                              http://host.containers.internal:8200
+
+                    Key points
+
+                       •  VaultConnection: how to reach Vault — here, the host-level address http://host.containers.internal:8200 (VAULT_ADDR), since Vault lives in a different cluster.
+                       •  VaultAuth: uses the dedicated kubernetes-vso mount with role vso-demo, distinct from the same-cluster auth/kubernetes mount used by the Agent Injector demos.
+                       •  VaultStaticSecret: read kv-v2/vault-demo/mysecret, refresh every 30s, and materialize it as the native Secret vso-demo-mysecret.
+
+                                                                                                                                                                                                                                             7 / 16
+
+=== BEFORE STEP 8 footer=8 / 16 ===
+
+                                                                                                    4 — The native Kubernetes Secret VSO created
+
+                    VSO wrote a standard Kubernetes Secret (not a file in a pod), in the VSO cluster:
+
+                                                                                      kubectl --context kind-vso-lab get secret vso-demo-mysecret -n vso-demo
+
+                                                                                    —————————————————————————————— [not started] ———————————————————————————————
+
+                    Decode the synced value:
+
+                                                             kubectl --context kind-vso-lab get secret vso-demo-mysecret -n vso-demo -o jsonpath='{.data.username}' | base64 -d; echo
+
+                                                           ——————————————————————————————————————————————————————— [not started] ———————————————————————————————————————————————————————
+
+                    Key points
+
+                       •  This is a first-class Secret object any workload can consume.
+                       •  The value came from Vault in a different cluster, but the object here is pure Kubernetes.
+
+                                                                                                                                                                                                                                             8 / 16
+
+=== AFTER CTRL-E STEP 8 footer=8 / 16 ===
+
+                                                                                                    4 — The native Kubernetes Secret VSO created
+
+                    VSO wrote a standard Kubernetes Secret (not a file in a pod), in the VSO cluster:
+
+                                                                                      kubectl --context kind-vso-lab get secret vso-demo-mysecret -n vso-demo
+
+                                                                                    ———————————————————————————————— [finished] ————————————————————————————————
+
+                                                                                      NAME                TYPE     DATA   AGE
+                                                                                      vso-demo-mysecret   Opaque   2      55m
+
+                    Decode the synced value:
+
+                                                             kubectl --context kind-vso-lab get secret vso-demo-mysecret -n vso-demo -o jsonpath='{.data.username}' | base64 -d; echo
+
+                                                           ———————————————————————————————————————————————————————— [finished] —————————————————————————————————————————————————————————
+
+                                                             larry
+
+                    Key points
+
+                       •  This is a first-class Secret object any workload can consume.
+                       •  The value came from Vault in a different cluster, but the object here is pure Kubernetes.
+
+                                                                                                                                                                                                                                             8 / 16
+
+=== BEFORE STEP 9 footer=9 / 16 ===
+
+                                                                                                 5 — A plain pod consumes it with zero Vault config
+
+                    The app reads the secret through standard envFrom at pod start:
+
+                                                                                 kubectl --context kind-vso-lab exec vso-demo-app -n vso-demo -- printenv username
+
+                                                                               ——————————————————————————————————— [not started] ————————————————————————————————————
+
+                    The consuming pod has NO Vault annotations and NO sidecar (count = 0):
+
+                                                                  kubectl --context kind-vso-lab get pod vso-demo-app -n vso-demo -o yaml | grep -c 'vault.hashicorp.com' || true
+
+                                                                —————————————————————————————————————————————————— [not started] ———————————————————————————————————————————————————
+
+                    It is a single-container pod (1/1), not 2/2 like an injected sidecar pod:
+
+                                                                                          kubectl --context kind-vso-lab get pod vso-demo-app -n vso-demo
+
+                                                                                        —————————————————————————— [not started] ———————————————————————————
+
+                                                                                                                                                                                                                                             9 / 16
+
+=== AFTER CTRL-E STEP 9 footer=9 / 16 ===
+
+                                                                                                 5 — A plain pod consumes it with zero Vault config
+
+                    The app reads the secret through standard envFrom at pod start:
+
+                                                                                 kubectl --context kind-vso-lab exec vso-demo-app -n vso-demo -- printenv username
+
+                                                                               ————————————————————————————————————— [finished] —————————————————————————————————————
+
+                                                                                 larry
+
+                    The consuming pod has NO Vault annotations and NO sidecar (count = 0):
+
+                                                                  kubectl --context kind-vso-lab get pod vso-demo-app -n vso-demo -o yaml | grep -c 'vault.hashicorp.com' || true
+
+                                                                ———————————————————————————————————————————————————— [finished] ————————————————————————————————————————————————————
+
+                                                                  0
+
+                    It is a single-container pod (1/1), not 2/2 like an injected sidecar pod:
+
+                                                                                          kubectl --context kind-vso-lab get pod vso-demo-app -n vso-demo
+
+                                                                                        ———————————————————————————— [finished] ————————————————————————————
+
+                                                                                          NAME           READY   STATUS    RESTARTS   AGE
+                                                                                          vso-demo-app   1/1     Running   0          48m
+
+                                                                                                                                                                                                                                             9 / 16
+
+=== BEFORE STEP 10 footer=10 / 16 ===
+
+                                                                                                      6 — Set up cross-cluster Kubernetes auth
+
+                    This is the customer-facing setup step: configure a Vault auth method in the Vault cluster that validates service account JWTs against the VSO cluster's API server.
+
+                                                                                                   make configure-vso-auth
+
+                                                                                                 ————————————————— [not started] ——————————————————
+
+                    What that command does
+
+                       •  Reads the VSO cluster API server CA from kubeconfig.
+                       •  Mints a reviewer JWT for vso-demo/vault-token-reviewer in the VSO cluster.
+                       •  Enables/refreshes auth/kubernetes-vso in Vault without touching same-cluster auth/kubernetes.
+                       •  Writes auth/kubernetes-vso/config with the VSO API endpoint.
+                       •  Writes role vso-demo, bound only to service account vso-demo/vso-demo.
+
+                                                                                                                                                                                                                                            10 / 16
+
+=== AFTER CTRL-E STEP 10 footer=10 / 16 ===
+
+                                                                                                      6 — Set up cross-cluster Kubernetes auth
+
+                    This is the customer-facing setup step: configure a Vault auth method in the Vault cluster that validates service account JWTs against the VSO cluster's API server.
+
+                                                                                                   make configure-vso-auth
+
+                                                                                                 ————————————— [finished with error] ——————————————
+
+                                                                                             make: *** No rule to make target `configure-vso-auth'.
+                                                                                             Stop.
+
+                    What that command does
+
+                       •  Reads the VSO cluster API server CA from kubeconfig.
+                       •  Mints a reviewer JWT for vso-demo/vault-token-reviewer in the VSO cluster.
+                       •  Enables/refreshes auth/kubernetes-vso in Vault without touching same-cluster auth/kubernetes.
+                       •  Writes auth/kubernetes-vso/config with the VSO API endpoint.
+                       •  Writes role vso-demo, bound only to service account vso-demo/vso-demo.
+
+                                                                                                                                                                                                                                            10 / 16
+
+=== BEFORE STEP 11 footer=11 / 16 ===
+
+                                                                                                    6b — Verify the cross-cluster trust boundary
+
+                    First, the reviewer identity exists in the VSO cluster and can perform TokenReview through system:auth-delegator:
+
+                                                                     kubectl --context kind-vso-lab -n vso-demo get sa vault-token-reviewer vso-demo
+                                                                     kubectl --context kind-vso-lab get clusterrolebinding vault-token-reviewer-auth-delegator \
+                                                                       -o custom-columns=NAME:.metadata.name,ROLE:.roleRef.name,SA:.subjects[0].name,NS:.subjects[0].namespace
+
+                                                                   ——————————————————————————————————————————————— [not started] ————————————————————————————————————————————————
+
+                    Then, the Vault auth method lives in the Vault cluster, but points at the VSO cluster API server:
+
+                                                                    kubectl --context kind-vault-lab exec vault-0 -n default -- \
+                                                                      vault read -format=json auth/kubernetes-vso/config | \
+                                                                      jq -r '.data | "kubernetes_host=\(.kubernetes_host)\ndisable_iss_validation=\(.disable_iss_validation)"'
+
+                                                                  ———————————————————————————————————————————————— [not started] ————————————————————————————————————————————————
+
+                                                                                                                                                                                                                                            11 / 16
+
+=== AFTER CTRL-E STEP 11 footer=11 / 16 ===
+
+                                                                                                    6b — Verify the cross-cluster trust boundary
+
+                    First, the reviewer identity exists in the VSO cluster and can perform TokenReview through system:auth-delegator:
+
+                                                                     kubectl --context kind-vso-lab -n vso-demo get sa vault-token-reviewer vso-demo
+                                                                     kubectl --context kind-vso-lab get clusterrolebinding vault-token-reviewer-auth-delegator \
+                                                                       -o custom-columns=NAME:.metadata.name,ROLE:.roleRef.name,SA:.subjects[0].name,NS:.subjects[0].namespace
+
+                                                                   ————————————————————————————————————————————————— [finished] —————————————————————————————————————————————————
+
+                                                                     NAME                   AGE
+                                                                     vault-token-reviewer   68m
+                                                                     vso-demo               68m
+                                                                     NAME                                  ROLE                    SA                     NS
+                                                                     vault-token-reviewer-auth-delegator   system:auth-delegator   vault-token-reviewer   vso-demo
+
+                    Then, the Vault auth method lives in the Vault cluster, but points at the VSO cluster API server:
+
+                                                                    kubectl --context kind-vault-lab exec vault-0 -n default -- \
+                                                                      vault read -format=json auth/kubernetes-vso/config | \
+                                                                      jq -r '.data | "kubernetes_host=\(.kubernetes_host)\ndisable_iss_validation=\(.disable_iss_validation)"'
+
+                                                                  ————————————————————————————————————————————————— [finished] ——————————————————————————————————————————————————
+
+                                                                    kubernetes_host=https://host.containers.internal:6444
+                                                                    disable_iss_validation=true
+
+                                                                                                                                                                                                                                            11 / 16
+
+=== BEFORE STEP 12 footer=12 / 16 ===
+
+                                                                                                        6c — Least-privilege Vault identity
+
+                    The role maps only the VSO cluster's vso-demo/vso-demo service account to the narrow mysecret policy:
+
+                                                                         kubectl --context kind-vault-lab exec vault-0 -n default -- \
+                                                                           vault read auth/kubernetes-vso/role/vso-demo | \
+                                                                           grep -E 'bound_service_account_names|bound_service_account_namespaces|token_policies|policies'
+
+                                                                       ——————————————————————————————————————————— [not started] ———————————————————————————————————————————
+
+                    The mysecret policy only allows reading this one KV path:
+
+                                                                              kubectl --context kind-vault-lab exec vault-0 -n default -- vault policy read mysecret
+
+                                                                            —————————————————————————————————————— [not started] ——————————————————————————————————————
+
+                    Key point: auth/kubernetes-vso is the cross-cluster auth mount. The existing same-cluster auth/kubernetes mount remains separate for the Agent Injector demo path.
+
+                                                                                                                                                                                                                                            12 / 16
+
+=== AFTER CTRL-E STEP 12 footer=12 / 16 ===
+
+                                                                                                        6c — Least-privilege Vault identity
+
+                    The role maps only the VSO cluster's vso-demo/vso-demo service account to the narrow mysecret policy:
+
+                                                                         kubectl --context kind-vault-lab exec vault-0 -n default -- \
+                                                                           vault read auth/kubernetes-vso/role/vso-demo | \
+                                                                           grep -E 'bound_service_account_names|bound_service_account_namespaces|token_policies|policies'
+
+                                                                       ———————————————————————————————————————————— [finished] —————————————————————————————————————————————
+
+                                                                         bound_service_account_names                 [vso-demo]
+                                                                         bound_service_account_namespace_selector    n/a
+                                                                         bound_service_account_namespaces            [vso-demo]
+                                                                         policies                                    [mysecret]
+                                                                         token_policies                              [mysecret]
+
+                    The mysecret policy only allows reading this one KV path:
+
+                                                                              kubectl --context kind-vault-lab exec vault-0 -n default -- vault policy read mysecret
+
+                                                                            ——————————————————————————————————————— [finished] ————————————————————————————————————————
+
+                                                                              path "kv-v2/data/vault-demo/mysecret" {
+                                                                                capabilities = ["read"]
+                                                                              }
+
+                    Key point: auth/kubernetes-vso is the cross-cluster auth mount. The existing same-cluster auth/kubernetes mount remains separate for the Agent Injector demo path.
+
+                                                                                                                                                                                                                                            12 / 16
+
+=== BEFORE STEP 13 footer=13 / 16 ===
+
+                                                                                              7 — Live rotation: change Vault, watch the Secret update
+
+                    Seed Vault (in the Vault cluster) with the original value so rotation starts from a known baseline:
+
+                                                                 kubectl --context kind-vault-lab exec vault-0 -n default -- vault kv put kv-v2/vault-demo/mysecret username=larry
+
+                                                               ——————————————————————————————————————————————————— [not started] ————————————————————————————————————————————————————
+
+                    Wait for VSO (in the VSO cluster) to sync the baseline value into the Kubernetes Secret:
+
+                                                             for i in $(seq 1 20); do
+                                                               v=$(kubectl --context kind-vso-lab get secret vso-demo-mysecret -n vso-demo -o jsonpath='{.data.username}' | base64 -d)
+                                                               echo "  attempt $i: $v"
+                                                               if [ "$v" = "larry" ]; then echo '  -> Secret synced to baseline by VSO'; exit 0; fi
+                                                               sleep 3
+                                                             done
+                                                             echo 'ERROR: Secret did not sync to larry' >&2; exit 1
+
+                                                           ——————————————————————————————————————————————————————— [not started] ————————————————————————————————————————————————————————
+
+                                                                                                                                                                                                                                            13 / 16
+
+=== AFTER CTRL-E STEP 13 footer=13 / 16 ===
+
+                                                                                              7 — Live rotation: change Vault, watch the Secret update
+
+                    Seed Vault (in the Vault cluster) with the original value so rotation starts from a known baseline:
+
+                                                                 kubectl --context kind-vault-lab exec vault-0 -n default -- vault kv put kv-v2/vault-demo/mysecret username=larry
+
+                                                               ————————————————————————————————————————————————————— [finished] —————————————————————————————————————————————————————
+
+                                                                 ========= Secret Path =========
+                                                                 kv-v2/data/vault-demo/mysecret
+
+                                                                 ======= Metadata =======
+                                                                 Key                Value
+                                                                 ---                -----
+                                                                 created_time       2026-07-10T05:27:46.362892187Z
+                                                                 custom_metadata    <nil>
+                                                                 deletion_time      n/a
+                                                                 destroyed          false
+                                                                 version            35
+
+                    Wait for VSO (in the VSO cluster) to sync the baseline value into the Kubernetes Secret:
+
+                                                             for i in $(seq 1 20); do
+                                                               v=$(kubectl --context kind-vso-lab get secret vso-demo-mysecret -n vso-demo -o jsonpath='{.data.username}' | base64 -d)
+                                                               echo "  attempt $i: $v"
+                                                               if [ "$v" = "larry" ]; then echo '  -> Secret synced to baseline by VSO'; exit 0; fi
+                                                               sleep 3
+                                                             done
+                                                             echo 'ERROR: Secret did not sync to larry' >&2; exit 1
+
+                                                           ————————————————————————————————————————————————————————— [finished] —————————————————————————————————————————————————————————
+
+                                                               attempt 1: larry
+                                                               -> Secret synced to baseline by VSO
+
+                                                                                                                                                                                                                                            13 / 16
+
+Detected failure at 13 / 16
