@@ -102,11 +102,10 @@ VSO_AUTH_ROLE="${VSO_AUTH_ROLE:-vso-demo}"
 # JWT/OIDC auth (VSO -> Vault), replacing the Kubernetes auth mount above
 # --------------------------------------------------------------------------
 # Vault JWT auth mount dedicated to the VSO cluster's service account JWTs,
-# validated via the VSO cluster's OIDC issuer/JWKS rather than a
-# TokenReview call back to the VSO cluster's API server. Named distinctly
-# from `${VSO_AUTH_MOUNT}` (`kubernetes-vso`) so both can exist side by
-# side during migration; see docs/vso-jwt-oidc-auth-spike-01.md for the
-# jwks_url vs oidc_discovery_url decision this mount's config relies on.
+# validated through the VSO cluster's OIDC discovery metadata and advertised
+# JWKS rather than a TokenReview callback. Named distinctly from
+# `${VSO_AUTH_MOUNT}` (`kubernetes-vso`) so both can exist side by side during
+# migration; see docs/vso-oidc-discovery-handoff.md.
 VSO_JWT_AUTH_MOUNT="${VSO_JWT_AUTH_MOUNT:-jwt-vso}"
 VSO_JWT_AUTH_ROLE="${VSO_JWT_AUTH_ROLE:-vso-demo}"
 
@@ -115,19 +114,47 @@ VSO_JWT_AUTH_ROLE="${VSO_JWT_AUTH_ROLE:-vso-demo}"
 # JWT minted for another audience is rejected outright.
 VSO_JWT_AUDIENCE="${VSO_JWT_AUDIENCE:-vault}"
 
-# `bound_issuer` string Vault compares against the JWT's `iss` claim. This
-# is a plain string compare -- it does not need to be reachable from the
-# Vault cluster. Default kind clusters self-report the Kubernetes-internal
-# issuer below (see spike 01); override if the VSO cluster's kind config
-# sets `service-account-issuer` to something else.
-VSO_OIDC_ISSUER="${VSO_OIDC_ISSUER:-https://kubernetes.default.svc.cluster.local}"
+# Vault's discovery base, the discovery document's issuer, and the JWT `iss`
+# claim must be identical. The VSO kind API server is configured with this
+# externally reachable ServiceAccount issuer at cluster creation time.
+VSO_OIDC_DISCOVERY_URL="${VSO_OIDC_DISCOVERY_URL:-${VSO_API_ADDR}}"
+VSO_OIDC_ISSUER="${VSO_OIDC_ISSUER:-${VSO_OIDC_DISCOVERY_URL}}"
 
-# JWKS endpoint Vault fetches signing keys from to validate VSO cluster
-# service account JWTs, reached over the same cross-cluster host+port as
-# ${VSO_API_ADDR} (see spike 01: the VSO cluster's self-reported
-# `jwks_uri` is a Podman-bridge IP that is not reliably reachable, so this
-# uses the same externally-reachable address as VSO_API_ADDR instead).
-VSO_OIDC_JWKS_URL="${VSO_OIDC_JWKS_URL:-${VSO_API_ADDR}/openid/v1/jwks}"
+# Expected JWKS URI advertised by discovery. Vault does not configure this
+# directly; verification uses it to assert that discovery is self-consistent.
+VSO_OIDC_JWKS_URL="${VSO_OIDC_JWKS_URL:-${VSO_OIDC_DISCOVERY_URL}/openid/v1/jwks}"
+
+# validate_vso_oidc_env
+#
+# Ensures all externally rendered/configured OIDC values derive from the same
+# host and port. Override TWO_CLUSTER_HOST and VSO_API_HOST_PORT together;
+# overriding only a derived URL would make kubeadm and Vault disagree.
+validate_vso_oidc_env() {
+  local expected_api_addr="https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}"
+  local expected_jwks_url="${VSO_OIDC_DISCOVERY_URL}/openid/v1/jwks"
+  local ok=0
+
+  if [ "$VSO_API_ADDR" != "$expected_api_addr" ]; then
+    echo "ERROR: VSO_API_ADDR must derive from TWO_CLUSTER_HOST and VSO_API_HOST_PORT." >&2
+    echo "       expected='${expected_api_addr}' actual='${VSO_API_ADDR}'" >&2
+    ok=1
+  fi
+  if [ "$VSO_OIDC_DISCOVERY_URL" != "$VSO_API_ADDR" ]; then
+    echo "ERROR: VSO_OIDC_DISCOVERY_URL must equal VSO_API_ADDR." >&2
+    ok=1
+  fi
+  if [ "$VSO_OIDC_ISSUER" != "$VSO_OIDC_DISCOVERY_URL" ]; then
+    echo "ERROR: VSO_OIDC_ISSUER must equal VSO_OIDC_DISCOVERY_URL." >&2
+    ok=1
+  fi
+  if [ "$VSO_OIDC_JWKS_URL" != "$expected_jwks_url" ]; then
+    echo "ERROR: VSO_OIDC_JWKS_URL must be the discovery URL plus /openid/v1/jwks." >&2
+    echo "       expected='${expected_jwks_url}' actual='${VSO_OIDC_JWKS_URL}'" >&2
+    ok=1
+  fi
+
+  return "$ok"
+}
 
 SECRET_NAME="${SECRET_NAME:-vso-demo-mysecret}"
 APP_POD="${APP_POD:-vso-demo-app}"
@@ -327,6 +354,7 @@ VSO_AUTH_ROLE=$VSO_AUTH_ROLE
 VSO_JWT_AUTH_MOUNT=$VSO_JWT_AUTH_MOUNT
 VSO_JWT_AUTH_ROLE=$VSO_JWT_AUTH_ROLE
 VSO_JWT_AUDIENCE=$VSO_JWT_AUDIENCE
+VSO_OIDC_DISCOVERY_URL=$VSO_OIDC_DISCOVERY_URL
 VSO_OIDC_ISSUER=$VSO_OIDC_ISSUER
 VSO_OIDC_JWKS_URL=$VSO_OIDC_JWKS_URL
 SECRET_NAME=$SECRET_NAME

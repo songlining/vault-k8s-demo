@@ -1,5 +1,14 @@
 # VSO JWT/OIDC Authentication Migration Plan
 
+> **Historical plan with a superseded verification-source decision:** This plan
+> originally selected direct `jwks_url`, which was correct for kind's then-default
+> cluster-internal ServiceAccount issuer. The subsequent discovery migration
+> configures the VSO API server with an externally reachable issuer and
+> advertised JWKS URI, so the current implementation uses TLS-verified
+> `oidc_discovery_url`. See
+> [`vso-oidc-discovery-handoff.md`](./vso-oidc-discovery-handoff.md). Historical
+> phases and evidence below are intentionally preserved.
+
 ## Objective
 
 Update the two-cluster Vault Secrets Operator (VSO) demo to use Vault's JWT/OIDC auth method instead of the current Kubernetes auth + TokenReview reviewer-token pattern.

@@ -26,8 +26,8 @@
 > cross-cluster networking, and JWT/OIDC auth design, see
 > [`vso-two-cluster-podman-plan.md`](./vso-two-cluster-podman-plan.md)
 > (two-cluster topology) and [`vso-jwt-oidc-auth-plan.md`](./vso-jwt-oidc-auth-plan.md)
-> (JWT/OIDC auth), and for user-facing instructions see the top-level
-> [`README.md`](../README.md).
+> (JWT/OIDC auth), and for user-facing instructions see
+> [`vso-jwt-oidc-demo.md`](./vso-jwt-oidc-demo.md).
 >
 > **What is accurate vs. stale in this document:** the CRD pipeline
 > (`VaultConnection` → `VaultAuth` → `VaultStaticSecret`), the rotation

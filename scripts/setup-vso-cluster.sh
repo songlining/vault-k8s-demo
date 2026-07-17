@@ -23,9 +23,9 @@
 # The demo's default cross-cluster auth path is Vault JWT/OIDC auth
 # (auth/${VSO_JWT_AUTH_MOUNT}, see scripts/configure-vso-jwt-auth.sh and
 # docs/vso-jwt-oidc-auth-plan.md). Vault validates 'vso-demo' service
-# account JWTs against this cluster's JWKS signing keys directly -- it
-# never calls back into this cluster's TokenReview API, and no reviewer
-# JWT is ever stored in Vault. Because of that, this script does NOT
+# account JWTs by retrieving this cluster's OIDC discovery metadata and then
+# its advertised JWKS signing keys. It never calls this cluster's TokenReview
+# API, and no reviewer JWT is ever stored in Vault. Because of that, this script does NOT
 # create a 'vault-token-reviewer' service account or bind
 # 'system:auth-delegator' by default.
 #
@@ -131,11 +131,10 @@ EOF
 # --- OIDC discovery reader RBAC (default JWT/OIDC auth path) --------------
 #
 # Vault's JWT/OIDC auth method (auth/${VSO_JWT_AUTH_MOUNT}, configured in
-# scripts/configure-vso-jwt-auth.sh) fetches this cluster's JWKS signing
-# keys directly from its API server (jwks_url, see
-# docs/vso-jwt-oidc-auth-spike-01.md) to validate 'vso-demo' service
-# account JWTs. That fetch is an unauthenticated GET -- Vault's JWT auth
-# does not send a bearer token when retrieving JWKS/discovery documents.
+# scripts/configure-vso-jwt-auth.sh) first fetches this cluster's discovery
+# document and then follows its advertised `jwks_uri` to validate 'vso-demo'
+# ServiceAccount JWTs. Both are unauthenticated GETs -- Vault's JWT auth does
+# not send a bearer token when retrieving discovery or JWKS documents.
 #
 # Default kind/kubeadm RBAC does not grant unauthenticated callers access
 # to '/.well-known/openid-configuration' or '/openid/v1/jwks' (only a

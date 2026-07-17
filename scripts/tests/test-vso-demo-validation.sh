@@ -198,6 +198,18 @@ assert_contains \
 assert_contains \
   "wrong-service-account JWT proof is present" \
   "$VSO_DEMO_CONTENTS" 'correctly rejected (wrong service account)'
+assert_contains \
+  "guided demo explains OIDC discovery" \
+  "$VSO_DEMO_CONTENTS" 'OIDC discovery'
+assert_contains \
+  "guided demo shows Vault oidc_discovery_url" \
+  "$VSO_DEMO_CONTENTS" 'oidc_discovery_url'
+assert_contains \
+  "guided demo explains the advertised JWKS URI" \
+  "$VSO_DEMO_CONTENTS" 'advertised JWKS'
+assert_contains \
+  "guided demo explains RS256 restriction" \
+  "$VSO_DEMO_CONTENTS" 'RS256'
 
 no_reviewer_jwt_writes=$(grep -nE 'token_reviewer_jwt=' "$VSO_DEMO" || true)
 if [ -n "$no_reviewer_jwt_writes" ]; then
@@ -218,6 +230,14 @@ if [ -n "$raw_jwt_echoes" ]; then
   fail=$((fail + 1))
 else
   echo "PASS: vso-demo.sh never echoes the raw \$JWT variable"
+  pass=$((pass + 1))
+fi
+
+if grep -nE 'jwt=.*\\?\$JWT' "$VSO_DEMO" >/dev/null; then
+  echo "FAIL: guided demo passes the complete JWT as a kubectl exec argument"
+  fail=$((fail + 1))
+else
+  echo "PASS: guided demo sends JWTs over stdin with jwt=-"
   pass=$((pass + 1))
 fi
 

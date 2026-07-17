@@ -14,9 +14,9 @@
 #      the VSO cluster ONLY (not in the Vault cluster).
 #   4. A pod in the VSO cluster can reach Vault at the documented external
 #      address (VAULT_ADDR).
-#   5. Vault authenticates a real VSO cluster service account JWT directly
-#      against the VSO cluster's JWKS (no TokenReview) through the
-#      dedicated auth/${VSO_JWT_AUTH_MOUNT} (jwt-vso) mount -- and proves
+#   5. Vault authenticates a real VSO cluster ServiceAccount JWT through
+#      TLS-verified OIDC discovery and its advertised JWKS (no TokenReview)
+#      on the dedicated auth/${VSO_JWT_AUTH_MOUNT} (jwt-vso) mount -- and proves
 #      that mount's strict claim binding by also confirming a
 #      wrong-audience JWT and a wrong-service-account JWT are BOTH
 #      rejected.
@@ -33,7 +33,8 @@
 #
 # Env overrides live in scripts/lib/two-cluster-env.sh (VAULT_CONTEXT,
 # VSO_CONTEXT, VAULT_ADDR, NAMESPACE, VSO_NAMESPACE, VSO_OPERATOR_NAMESPACE,
-# VSO_JWT_AUTH_MOUNT, VSO_JWT_AUTH_ROLE, VSO_JWT_AUDIENCE, SECRET_NAME,
+# VSO_JWT_AUTH_MOUNT, VSO_JWT_AUTH_ROLE, VSO_JWT_AUDIENCE,
+# VSO_OIDC_DISCOVERY_URL, VSO_OIDC_ISSUER, VSO_OIDC_JWKS_URL, SECRET_NAME,
 # APP_POD), plus BASELINE_USERNAME (default: larry), ROTATED_USERNAME
 # (default: larry-rotated), ROTATION_ATTEMPTS (default: 20),
 # ROTATION_SLEEP (default: 3, seconds between polls), and
@@ -96,7 +97,7 @@ section() {
 section "1/7 contexts"
 
 fail=0
-require_commands kubectl base64 jq || fail=1
+require_commands kubectl base64 jq curl || fail=1
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
@@ -104,8 +105,11 @@ fi
 require_contexts || fail_section \
   "VAULT_CONTEXT ('${VAULT_CONTEXT}') and VSO_CONTEXT ('${VSO_CONTEXT}') must both exist and be different clusters." \
   "Run 'make clusters' (or scripts/create-clusters.sh) first."
+validate_vso_oidc_env || fail_section \
+  "The configured VSO API/discovery/issuer/JWKS URLs are inconsistent." \
+  "Override TWO_CLUSTER_HOST and VSO_API_HOST_PORT together instead of overriding a derived URL alone."
 
-echo "OK: VAULT_CONTEXT='${VAULT_CONTEXT}' and VSO_CONTEXT='${VSO_CONTEXT}' both exist and differ."
+echo "OK: contexts differ and VSO OIDC environment values are self-consistent."
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
   echo ""
@@ -133,6 +137,32 @@ if ! kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault status 2>/dev/null
     "Run 'make setup-vault' (or scripts/setup-vault-cluster.sh) first."
 fi
 echo "OK: Vault pod '${VAULT_POD}' is running and unsealed in context '${VAULT_CONTEXT}'."
+
+# The issuer migration must not regress the existing same-cluster Agent
+# Injector or authenticated OTel metrics paths in the Vault cluster.
+if [ "$(kubectl_vault get pod vault-demo -n "$NAMESPACE" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)" != "True" ]; then
+  fail_section "Agent Injector pod 'vault-demo' is not Ready in context '${VAULT_CONTEXT}'."
+fi
+if ! kubectl_vault exec vault-demo -n "$NAMESPACE" -c vault-demo -- \
+    test -s /vault/secrets/mysecret >/dev/null 2>&1; then
+  fail_section "Agent Injector pod 'vault-demo' does not have its rendered Vault secret."
+fi
+if [ "$(kubectl_vault get deployment otel-collector -n "$OBSERVABILITY_NAMESPACE" \
+    -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || true)" != "True" ]; then
+  fail_section "OpenTelemetry deployment is not Available in context '${VAULT_CONTEXT}'."
+fi
+if [ "$(kubectl_vault get pod vault-metrics-check -n "$OBSERVABILITY_NAMESPACE" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)" != "True" ]; then
+  fail_section "Vault metrics check pod is not Ready in context '${VAULT_CONTEXT}'."
+fi
+# shellcheck disable=SC2016 # expansion intentionally occurs inside the pod
+if ! kubectl_vault exec vault-metrics-check -n "$OBSERVABILITY_NAMESPACE" -c vault-metrics-check -- \
+    sh -c 'curl -sf -H "X-Vault-Token: $(cat /vault/secrets/token)" "http://vault.default.svc.cluster.local:8200/v1/sys/metrics?format=prometheus" | grep -qm1 "^# HELP vault_"' \
+    >/dev/null 2>&1; then
+  fail_section "Authenticated OTel metrics path could not read Vault Prometheus metrics."
+fi
+echo "OK: Agent Injector secret rendering and authenticated OTel metrics remain functional."
 
 # Negative placement: Vault must NOT be running in the VSO cluster.
 VAULT_IN_VSO=$(kubectl_vso get pods -n "$NAMESPACE" -l "$VAULT_POD_LABEL_SELECTOR" \
@@ -226,9 +256,9 @@ fi
 echo "OK: a pod in the VSO cluster reached Vault at '${VAULT_ADDR}'."
 
 # ---------------------------------------------------------------------------
-# 5. JWT/OIDC auth: Vault authenticates a real VSO cluster service account
-#    JWT, validated directly against the VSO cluster's JWKS (no
-#    TokenReview, no reviewer JWT), through auth/${VSO_JWT_AUTH_MOUNT}. This
+# 5. JWT/OIDC auth: Vault authenticates a real VSO cluster ServiceAccount
+#    JWT through OIDC discovery and its advertised JWKS (no TokenReview or
+#    reviewer JWT), through auth/${VSO_JWT_AUTH_MOUNT}. This
 #    also proves the mount's strict claim binding by confirming a
 #    wrong-audience JWT and a wrong-service-account JWT are BOTH rejected
 #    -- JWT/OIDC security depends on this, so these negative checks are
@@ -243,7 +273,59 @@ if ! kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault auth list 2>/dev/n
     "Run 'make configure-vso-auth' (or scripts/configure-vso-jwt-auth.sh) first."
 fi
 
-# 5.0 Role/config output includes strict claim binding (bound_audiences AND
+# 5.0 Discovery metadata and Vault mount config must describe one externally
+# reachable issuer. The CA is held in memory and passed to curl through a
+# file descriptor; neither the CA nor the discovery document is printed.
+VSO_CLUSTER_NAME=$(kubectl config view --raw \
+  -o jsonpath="{.contexts[?(@.name==\"${VSO_CONTEXT}\")].context.cluster}")
+VSO_CA_DATA_B64=$(kubectl config view --raw \
+  -o jsonpath="{.clusters[?(@.name==\"${VSO_CLUSTER_NAME}\")].cluster.certificate-authority-data}")
+if [ -z "$VSO_CA_DATA_B64" ]; then
+  fail_section "Could not read the VSO cluster CA from kubeconfig for TLS-verified OIDC discovery."
+fi
+VSO_CA_PEM=$(printf '%s' "$VSO_CA_DATA_B64" | base64 --decode)
+
+OIDC_DISCOVERY_DOCUMENT=$(curl --silent --show-error --fail --noproxy '*' \
+  --cacert <(printf '%s' "$VSO_CA_PEM") \
+  --resolve "${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}:127.0.0.1" \
+  "${VSO_OIDC_DISCOVERY_URL}/.well-known/openid-configuration" 2>&1) || {
+  fail_section \
+    "Could not retrieve TLS-verified OIDC discovery metadata from '${VSO_OIDC_DISCOVERY_URL}'." \
+    "$OIDC_DISCOVERY_DOCUMENT"
+}
+unset VSO_CA_PEM VSO_CA_DATA_B64
+
+if ! printf '%s' "$OIDC_DISCOVERY_DOCUMENT" | jq -e --arg expected "$VSO_OIDC_DISCOVERY_URL" \
+    '.issuer == $expected' >/dev/null 2>&1; then
+  fail_section "OIDC discovery issuer does not equal VSO_OIDC_DISCOVERY_URL ('${VSO_OIDC_DISCOVERY_URL}')."
+fi
+if ! printf '%s' "$OIDC_DISCOVERY_DOCUMENT" | jq -e --arg expected "$VSO_OIDC_JWKS_URL" \
+    '.jwks_uri == $expected' >/dev/null 2>&1; then
+  fail_section "OIDC discovery jwks_uri does not equal the expected external URI ('${VSO_OIDC_JWKS_URL}')."
+fi
+unset OIDC_DISCOVERY_DOCUMENT
+
+echo "OK: TLS-verified OIDC discovery advertises the expected external issuer and JWKS URI."
+
+JWT_MOUNT_CONFIG=$(kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault read -format=json \
+  "auth/${VSO_JWT_AUTH_MOUNT}/config" 2>/dev/null || true)
+if ! printf '%s' "$JWT_MOUNT_CONFIG" | jq -e \
+    --arg discovery "$VSO_OIDC_DISCOVERY_URL" --arg issuer "$VSO_OIDC_ISSUER" '
+      .data.oidc_discovery_url == $discovery and
+      .data.bound_issuer == $issuer and
+      .data.jwt_supported_algs == ["RS256"] and
+      (.data.jwks_url // "") == ""
+    ' >/dev/null 2>&1; then
+  unset JWT_MOUNT_CONFIG
+  fail_section \
+    "auth/${VSO_JWT_AUTH_MOUNT}/config is not using the expected discovery URL, issuer, and RS256-only algorithm configuration, or still has a direct jwks_url." \
+    "Run 'make configure-vso-auth' first."
+fi
+unset JWT_MOUNT_CONFIG
+
+echo "OK: auth/${VSO_JWT_AUTH_MOUNT}/config uses OIDC discovery with RS256 and no direct jwks_url."
+
+# 5.1 Role output includes strict claim binding (bound_audiences AND
 #     bound_subject, not just the issuer) -- the concrete mitigation this
 #     mount relies on so the wrong audience or wrong service account can't
 #     accidentally authenticate.
@@ -256,16 +338,21 @@ ROLE_OUTPUT=$(kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault read -for
 
 ROLE_BOUND_AUDIENCES=$(printf '%s' "$ROLE_OUTPUT" | jq -r '(.data.bound_audiences // []) | join(",")' 2>/dev/null || true)
 ROLE_BOUND_SUBJECT=$(printf '%s' "$ROLE_OUTPUT" | jq -r '.data.bound_subject // empty' 2>/dev/null || true)
+ROLE_NO_DEFAULT_POLICY=$(printf '%s' "$ROLE_OUTPUT" | jq -r '.data.token_no_default_policy // false' 2>/dev/null || true)
+ROLE_TOKEN_TYPE=$(printf '%s' "$ROLE_OUTPUT" | jq -r '.data.token_type // empty' 2>/dev/null || true)
 EXPECTED_BOUND_SUBJECT="system:serviceaccount:${VSO_NAMESPACE}:vso-demo"
 
-if [ "$ROLE_BOUND_AUDIENCES" != "$VSO_JWT_AUDIENCE" ] || [ "$ROLE_BOUND_SUBJECT" != "$EXPECTED_BOUND_SUBJECT" ]; then
+if [ "$ROLE_BOUND_AUDIENCES" != "$VSO_JWT_AUDIENCE" ] \
+    || [ "$ROLE_BOUND_SUBJECT" != "$EXPECTED_BOUND_SUBJECT" ] \
+    || [ "$ROLE_NO_DEFAULT_POLICY" != "true" ] \
+    || [ "$ROLE_TOKEN_TYPE" != "batch" ]; then
   fail_section \
-    "auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE} is not strictly bound (bound_audiences='${ROLE_BOUND_AUDIENCES:-<none>}', bound_subject='${ROLE_BOUND_SUBJECT:-<none>}'; expected audience '${VSO_JWT_AUDIENCE}' and subject '${EXPECTED_BOUND_SUBJECT}')." \
+    "auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE} must be strictly bound and issue no-default-policy batch tokens (bound_audiences='${ROLE_BOUND_AUDIENCES:-<none>}', bound_subject='${ROLE_BOUND_SUBJECT:-<none>}', token_no_default_policy='${ROLE_NO_DEFAULT_POLICY:-<none>}', token_type='${ROLE_TOKEN_TYPE:-<none>}')." \
     "Run 'make configure-vso-auth' (or scripts/configure-vso-jwt-auth.sh) first."
 fi
-echo "OK: auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE} strictly binds bound_audiences='${VSO_JWT_AUDIENCE}' and bound_subject='${EXPECTED_BOUND_SUBJECT}'."
+echo "OK: auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE} strictly binds claims and issues non-renewable mysecret-only batch tokens."
 
-# 5.1 Positive: the real 'vso-demo' service account, with the intended
+# 5.2 Positive: the real 'vso-demo' service account, with the intended
 #     audience, must authenticate successfully.
 VSO_SA_JWT=$(kubectl_vso create token vso-demo -n "$VSO_NAMESPACE" --duration 10m --audience "${VSO_JWT_AUDIENCE}" 2>/dev/null || true)
 if [ -z "$VSO_SA_JWT" ]; then
@@ -274,8 +361,39 @@ if [ -z "$VSO_SA_JWT" ]; then
     "Run 'make setup-vso' (or scripts/setup-vso-cluster.sh) first."
 fi
 
-LOGIN_OUTPUT=$(kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- vault write -format=json \
-  "auth/${VSO_JWT_AUTH_MOUNT}/login" role="${VSO_JWT_AUTH_ROLE}" jwt="${VSO_SA_JWT}" 2>&1) || {
+JWT_PAYLOAD_SEGMENT="${VSO_SA_JWT#*.}"
+JWT_PAYLOAD_SEGMENT="${JWT_PAYLOAD_SEGMENT%%.*}"
+JWT_PAYLOAD_SEGMENT="${JWT_PAYLOAD_SEGMENT//-/+}"
+JWT_PAYLOAD_SEGMENT="${JWT_PAYLOAD_SEGMENT//_/\/}"
+case $((${#JWT_PAYLOAD_SEGMENT} % 4)) in
+  2) JWT_PAYLOAD_SEGMENT+="==" ;;
+  3) JWT_PAYLOAD_SEGMENT+="=" ;;
+  1) unset VSO_SA_JWT; fail_section "Minted ServiceAccount JWT has invalid base64url payload length." ;;
+esac
+JWT_PAYLOAD_JSON=$(printf '%s' "$JWT_PAYLOAD_SEGMENT" | base64 --decode 2>/dev/null || true)
+unset JWT_PAYLOAD_SEGMENT
+if ! printf '%s' "$JWT_PAYLOAD_JSON" | jq -e --arg expected "$VSO_OIDC_ISSUER" \
+    '.iss == $expected' >/dev/null 2>&1; then
+  unset VSO_SA_JWT JWT_PAYLOAD_JSON
+  fail_section "Minted ServiceAccount JWT issuer does not equal VSO_OIDC_ISSUER ('${VSO_OIDC_ISSUER}')."
+fi
+JWT_AUDIENCE_VALID=$(printf '%s' "$JWT_PAYLOAD_JSON" | jq -r --arg expected "$VSO_JWT_AUDIENCE" \
+  'if (.aud | type) == "array" then (.aud | index($expected) != null) else .aud == $expected end' 2>/dev/null || true)
+if [ "$JWT_AUDIENCE_VALID" != "true" ]; then
+  unset VSO_SA_JWT JWT_PAYLOAD_JSON JWT_AUDIENCE_VALID
+  fail_section "Minted ServiceAccount JWT audience does not contain '${VSO_JWT_AUDIENCE}'."
+fi
+if ! printf '%s' "$JWT_PAYLOAD_JSON" | jq -e --arg expected "$EXPECTED_BOUND_SUBJECT" \
+    '.sub == $expected' >/dev/null 2>&1; then
+  unset VSO_SA_JWT JWT_PAYLOAD_JSON JWT_AUDIENCE_VALID
+  fail_section "Minted ServiceAccount JWT subject does not equal '${EXPECTED_BOUND_SUBJECT}'."
+fi
+unset JWT_PAYLOAD_JSON JWT_AUDIENCE_VALID
+echo "OK: minted ServiceAccount JWT has the expected issuer, audience, and subject claims."
+
+LOGIN_OUTPUT=$(printf '%s' "$VSO_SA_JWT" | kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- \
+  vault write -format=json "auth/${VSO_JWT_AUTH_MOUNT}/login" \
+  role="${VSO_JWT_AUTH_ROLE}" jwt=- 2>&1) || {
   unset VSO_SA_JWT
   fail_section \
     "Vault rejected the correct 'vso-demo' service account JWT (audience: ${VSO_JWT_AUDIENCE}) against auth/${VSO_JWT_AUTH_MOUNT}/login (role: ${VSO_JWT_AUTH_ROLE})." \
@@ -284,15 +402,25 @@ LOGIN_OUTPUT=$(kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- vault write
 unset VSO_SA_JWT
 
 LOGIN_TOKEN=$(printf '%s' "$LOGIN_OUTPUT" | jq -r '.auth.client_token // empty' 2>/dev/null || true)
+TOKEN_POLICIES=$(printf '%s' "$LOGIN_OUTPUT" | jq -c '(.auth.token_policies // []) | sort' 2>/dev/null || true)
+EFFECTIVE_POLICIES=$(printf '%s' "$LOGIN_OUTPUT" | jq -c '(.auth.policies // []) | sort' 2>/dev/null || true)
+IDENTITY_POLICIES=$(printf '%s' "$LOGIN_OUTPUT" | jq -c '(.auth.identity_policies // []) | sort' 2>/dev/null || true)
+LOGIN_RENEWABLE=$(printf '%s' "$LOGIN_OUTPUT" | jq -r '.auth.renewable | tostring' 2>/dev/null || true)
 if [ -z "$LOGIN_TOKEN" ]; then
-  fail_section \
-    "Vault login through auth/${VSO_JWT_AUTH_MOUNT} did not return a client_token for the correct 'vso-demo' JWT." \
-    "$LOGIN_OUTPUT"
+  unset LOGIN_OUTPUT TOKEN_POLICIES EFFECTIVE_POLICIES IDENTITY_POLICIES LOGIN_RENEWABLE
+  fail_section "Vault login through auth/${VSO_JWT_AUTH_MOUNT} did not return a client_token for the correct 'vso-demo' JWT."
 fi
-unset LOGIN_TOKEN LOGIN_OUTPUT
-echo "OK: correct 'vso-demo' service account JWT (audience: ${VSO_JWT_AUDIENCE}) authenticates through auth/${VSO_JWT_AUTH_MOUNT} (role: ${VSO_JWT_AUTH_ROLE})."
+if [ "$TOKEN_POLICIES" != '["mysecret"]' ] \
+    || [ "$EFFECTIVE_POLICIES" != '["mysecret"]' ] \
+    || [ "$IDENTITY_POLICIES" != '[]' ] \
+    || [ "$LOGIN_RENEWABLE" != 'false' ]; then
+  unset LOGIN_TOKEN LOGIN_OUTPUT TOKEN_POLICIES EFFECTIVE_POLICIES IDENTITY_POLICIES LOGIN_RENEWABLE
+  fail_section "Vault login did not return a non-renewable batch token with exactly the mysecret effective policy and no identity policies."
+fi
+unset LOGIN_TOKEN LOGIN_OUTPUT TOKEN_POLICIES EFFECTIVE_POLICIES IDENTITY_POLICIES LOGIN_RENEWABLE
+echo "OK: correct 'vso-demo' JWT authenticates through auth/${VSO_JWT_AUTH_MOUNT} with only the mysecret policy."
 
-# 5.2 Negative: the real 'vso-demo' service account but the WRONG
+# 5.3 Negative: the real 'vso-demo' service account but the WRONG
 #     audience must be rejected (proves bound_audiences is enforced).
 VSO_JWT_WRONG_AUDIENCE="${VSO_JWT_WRONG_AUDIENCE:-not-${VSO_JWT_AUDIENCE}}"
 WRONG_AUD_JWT=$(kubectl_vso create token vso-demo -n "$VSO_NAMESPACE" --duration 10m --audience "${VSO_JWT_WRONG_AUDIENCE}" 2>/dev/null || true)
@@ -302,8 +430,9 @@ if [ -z "$WRONG_AUD_JWT" ]; then
     "Run 'make setup-vso' (or scripts/setup-vso-cluster.sh) first."
 fi
 
-if kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- vault write -format=json \
-    "auth/${VSO_JWT_AUTH_MOUNT}/login" role="${VSO_JWT_AUTH_ROLE}" jwt="${WRONG_AUD_JWT}" >/dev/null 2>&1; then
+if printf '%s' "$WRONG_AUD_JWT" | kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- \
+    vault write -format=json "auth/${VSO_JWT_AUTH_MOUNT}/login" \
+    role="${VSO_JWT_AUTH_ROLE}" jwt=- >/dev/null 2>&1; then
   unset WRONG_AUD_JWT
   fail_section \
     "Vault incorrectly ACCEPTED a 'vso-demo' service account JWT with the wrong audience ('${VSO_JWT_WRONG_AUDIENCE}') against auth/${VSO_JWT_AUTH_MOUNT}/login." \
@@ -312,7 +441,7 @@ fi
 unset WRONG_AUD_JWT
 echo "OK: Vault rejected a 'vso-demo' service account JWT with the wrong audience ('${VSO_JWT_WRONG_AUDIENCE}')."
 
-# 5.3 Negative: the correct audience but the WRONG service account (the
+# 5.4 Negative: the correct audience but the WRONG service account (the
 #     namespace's 'default' SA, not 'vso-demo') must be rejected (proves
 #     bound_subject is enforced).
 WRONG_SA_JWT=$(kubectl_vso create token default -n "$VSO_NAMESPACE" --duration 10m --audience "${VSO_JWT_AUDIENCE}" 2>/dev/null || true)
@@ -322,8 +451,9 @@ if [ -z "$WRONG_SA_JWT" ]; then
     "Run 'make setup-vso' (or scripts/setup-vso-cluster.sh) first."
 fi
 
-if kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- vault write -format=json \
-    "auth/${VSO_JWT_AUTH_MOUNT}/login" role="${VSO_JWT_AUTH_ROLE}" jwt="${WRONG_SA_JWT}" >/dev/null 2>&1; then
+if printf '%s' "$WRONG_SA_JWT" | kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- \
+    vault write -format=json "auth/${VSO_JWT_AUTH_MOUNT}/login" \
+    role="${VSO_JWT_AUTH_ROLE}" jwt=- >/dev/null 2>&1; then
   unset WRONG_SA_JWT
   fail_section \
     "Vault incorrectly ACCEPTED a JWT from the wrong service account ('default' in namespace '${VSO_NAMESPACE}') against auth/${VSO_JWT_AUTH_MOUNT}/login." \

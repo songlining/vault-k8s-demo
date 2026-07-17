@@ -218,25 +218,42 @@ else
   pass=$((pass + 1))
 fi
 
-# 16. The script must never use oidc_discovery_url (Phase 1 spike decision:
-#     jwks_url only), and must use jwks_url + bound_issuer. Only
-#     non-comment lines count -- explanatory comments contrasting this
-#     script with the not-chosen oidc_discovery_url mode are expected to
-#     mention the term.
-if grep -vE '^[[:space:]]*#' "$CONFIGURE_JWT_AUTH" | grep -q 'oidc_discovery_url'; then
-  echo "FAIL: script writes oidc_discovery_url outside of comments (spike 01 decision requires jwks_url only)"
-  fail=$((fail + 1))
-else
-  echo "PASS: script never writes oidc_discovery_url"
+# 16. Discovery mode must be the only active JWT verification source.
+if grep -qE 'oidc_discovery_url="\$\{VSO_OIDC_DISCOVERY_URL\}"' "$CONFIGURE_JWT_AUTH" \
+    && grep -qE 'oidc_discovery_ca_pem="\$\{VSO_CA_PEM\}"' "$CONFIGURE_JWT_AUTH" \
+    && grep -qE 'bound_issuer="\$\{VSO_OIDC_ISSUER\}"' "$CONFIGURE_JWT_AUTH" \
+    && grep -qE 'jwt_supported_algs=RS256' "$CONFIGURE_JWT_AUTH"; then
+  echo "PASS: config write uses OIDC discovery, its CA, strict issuer binding, and RS256"
   pass=$((pass + 1))
+else
+  echo "FAIL: config write is missing required OIDC discovery settings"
+  fail=$((fail + 1))
 fi
 
-if grep -qE 'jwks_url="\$\{VSO_OIDC_JWKS_URL\}"' "$CONFIGURE_JWT_AUTH" \
-    && grep -qE 'bound_issuer="\$\{VSO_OIDC_ISSUER\}"' "$CONFIGURE_JWT_AUTH"; then
-  echo "PASS: config write uses jwks_url + bound_issuer from shared env defaults"
+ACTIVE_DIRECT_JWKS=$(grep -vE '^[[:space:]]*#' "$CONFIGURE_JWT_AUTH" \
+  | grep -E '^[[:space:]]*(jwks_url|jwks_ca_pem)=' || true)
+if [ -z "$ACTIVE_DIRECT_JWKS" ]; then
+  echo "PASS: config write has no active direct jwks_url/jwks_ca_pem source"
   pass=$((pass + 1))
 else
-  echo "FAIL: config write does not use both jwks_url and bound_issuer from shared env defaults"
+  echo "FAIL: found active direct JWKS configuration alongside discovery:"
+  printf '%s\n' "$ACTIVE_DIRECT_JWKS" | sed 's/^/  /'
+  fail=$((fail + 1))
+fi
+
+if grep -qE 'token_no_default_policy=true' "$CONFIGURE_JWT_AUTH"; then
+  echo "PASS: role suppresses Vault's default policy"
+  pass=$((pass + 1))
+else
+  echo "FAIL: role must set token_no_default_policy=true so only mysecret is issued"
+  fail=$((fail + 1))
+fi
+
+if grep -qE 'token_type=batch' "$CONFIGURE_JWT_AUTH"; then
+  echo "PASS: role issues non-renewable batch tokens so VSO does not need the default policy's renew-self capability"
+  pass=$((pass + 1))
+else
+  echo "FAIL: role must use batch tokens when the default policy is suppressed"
   fail=$((fail + 1))
 fi
 
@@ -268,6 +285,15 @@ if [ -n "$bare_calls" ]; then
 else
   echo "PASS: every live-cluster kubectl invocation uses an explicit-context wrapper"
   pass=$((pass + 1))
+fi
+
+if grep -qE 'vault auth tune' "$CONFIGURE_JWT_AUTH" \
+    && grep -qF 'discovery and advertised JWKS' "$CONFIGURE_JWT_AUTH"; then
+  echo "PASS: existing mount descriptions are refreshed for discovery mode"
+  pass=$((pass + 1))
+else
+  echo "FAIL: existing JWT mounts retain stale direct-JWKS descriptions"
+  fail=$((fail + 1))
 fi
 
 # 19. Idempotent intent: the auth mount enable step must be guarded by a

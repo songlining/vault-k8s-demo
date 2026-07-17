@@ -64,6 +64,12 @@ check "configure-vso-auth depends on configure-vso-jwt-auth" $?
 grep -qE '^configure-vso-jwt-auth:.*## .*(JWT|OIDC)' "$MAKEFILE"
 check "configure-vso-jwt-auth has a JWT/OIDC description" $?
 
+grep -qE '^configure-vso-jwt-auth:.*## .*OIDC discovery.*advertised JWKS' "$MAKEFILE"
+check "configure-vso-jwt-auth description names discovery and advertised JWKS" $?
+
+grep -qF 'VSO_API_ADDR ?= https://$(TWO_CLUSTER_HOST):$(VSO_API_HOST_PORT)' "$MAKEFILE"
+check "VSO_API_ADDR derives from the same host/port rendered into kind" $?
+
 # 7. setup target's recipe invokes scripts/configure-vso-jwt-auth.sh.
 setup_recipe=$(awk '/^setup:/{flag=1; next} /^[a-zA-Z_-]+:/{flag=0} flag' "$MAKEFILE")
 echo "$setup_recipe" | grep -q 'scripts/configure-vso-jwt-auth.sh'

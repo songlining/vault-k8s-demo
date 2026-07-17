@@ -187,6 +187,14 @@ assert_contains \
   "checks VSO operator/CRDs/namespace are absent from the Vault cluster" \
   "$CONTENTS" 'unexpectedly exists in the Vault cluster'
 
+assert_contains \
+  "checks the Agent Injector rendered secret remains functional" \
+  "$CONTENTS" 'test -s /vault/secrets/mysecret'
+
+assert_contains \
+  "checks the OTel authenticated metrics path remains functional" \
+  "$CONTENTS" 'vault-metrics-check'
+
 # 11. Rotation section resets the baseline value even when the rotation
 #     itself fails (soft-landing behavior), and always attempts a final
 #     reset to BASELINE_USERNAME.
@@ -277,6 +285,82 @@ assert_contains \
   "auth section reviews bound_subject from the role output" \
   "$CONTENTS" 'bound_subject'
 
+assert_contains \
+  "auth section retrieves OIDC discovery metadata with the VSO cluster CA" \
+  "$CONTENTS" 'OIDC_DISCOVERY_DOCUMENT'
+
+assert_contains \
+  "auth section checks the discovered issuer" \
+  "$CONTENTS" '.issuer == $expected'
+
+assert_contains \
+  "auth section checks the advertised JWKS URI" \
+  "$CONTENTS" '.jwks_uri == $expected'
+
+assert_contains \
+  "auth section decodes the JWT payload without printing the complete token" \
+  "$CONTENTS" 'JWT_PAYLOAD_JSON'
+
+assert_contains \
+  "auth section validates the JWT issuer claim" \
+  "$CONTENTS" '.iss == $expected'
+
+assert_contains \
+  "auth section validates the JWT audience claim" \
+  "$CONTENTS" 'JWT_AUDIENCE_VALID'
+
+assert_contains \
+  "auth section validates the JWT subject claim" \
+  "$CONTENTS" '.sub == $expected'
+
+assert_contains \
+  "auth section reads and verifies the Vault JWT mount config" \
+  "$CONTENTS" 'JWT_MOUNT_CONFIG'
+
+assert_contains \
+  "auth section requires Vault OIDC discovery mode" \
+  "$CONTENTS" '.data.oidc_discovery_url == $discovery'
+
+assert_contains \
+  "auth section requires RS256" \
+  "$CONTENTS" '.data.jwt_supported_algs == ["RS256"]'
+
+assert_contains \
+  "auth section rejects residual direct jwks_url configuration" \
+  "$CONTENTS" '(.data.jwks_url // "") == ""'
+
+assert_contains \
+  "auth section verifies the issued token policy set" \
+  "$CONTENTS" 'TOKEN_POLICIES'
+
+assert_contains \
+  "auth section verifies the complete effective policy set" \
+  "$CONTENTS" 'EFFECTIVE_POLICIES'
+
+assert_contains \
+  "auth role requires non-renewable batch tokens" \
+  "$CONTENTS" 'ROLE_TOKEN_TYPE'
+
+assert_contains \
+  "auth login verifies the token is non-renewable" \
+  "$CONTENTS" 'LOGIN_RENEWABLE'
+
+assert_contains \
+  "auth section rejects unexpected identity policies" \
+  "$CONTENTS" 'IDENTITY_POLICIES'
+
+assert_contains \
+  "JWT login sends credentials over stdin instead of exec arguments" \
+  "$CONTENTS" 'jwt=-'
+
+if grep -nE 'jwt="\$\{?(VSO_SA_JWT|WRONG_AUD_JWT|WRONG_SA_JWT)' "$VERIFY_SCRIPT" >/dev/null; then
+  echo "FAIL: complete JWT is passed as a kubectl exec command argument"
+  fail=$((fail + 1))
+else
+  echo "PASS: complete JWTs are not passed as kubectl exec command arguments"
+  pass=$((pass + 1))
+fi
+
 # 12d. Final summary references auth/jwt-vso and JWT/OIDC, not the old
 #      kubernetes-vso auth mount.
 assert_contains \
@@ -307,7 +391,7 @@ bare_calls=$(grep -nE '(^|[^_a-zA-Z])(kubectl)[[:space:]]' "$VERIFY_SCRIPT" \
   | grep -vE '(kubectl_vso|kubectl_vault)' \
   | grep -vE '^[0-9]+:[[:space:]]*#' \
   | grep -vE '^[0-9]+:\s*echo ' \
-  | grep -vE 'require_commands|command -v' \
+  | grep -vE 'require_commands|command -v|kubectl config view' \
   | grep -viE 'Inspect with|Check:|logs -n' || true)
 if [ -n "$bare_calls" ]; then
   echo "FAIL: found bare kubectl invocation(s) not using an explicit-context wrapper:"

@@ -137,19 +137,20 @@ host network. Two things use it:
    (`http://host.containers.internal:8200` by default) rather than the
    in-cluster name `vault.default.svc.cluster.local`, which only resolves
    inside `kind-vault-lab`.
-2. **Vault → VSO cluster's JWKS**: Vault's dedicated `auth/jwt-vso` JWT/OIDC
-   mount validates VSO-cluster service account JWTs itself, cryptographically,
-   by fetching that cluster's public signing keys (JWKS) once and checking the
-   token's issuer/audience/subject claims locally — it never calls back into
-   the VSO cluster's API server the way Kubernetes auth's TokenReview does,
-   and Vault never stores a reviewer credential for the VSO cluster. That
-   JWKS endpoint is similarly mapped to a host port (`VSO_API_HOST_PORT`,
-   default `6444`), and Vault is configured with `jwks_url=VSO_OIDC_JWKS_URL`
-   (`https://host.containers.internal:6444/openid/v1/jwks` by default).
+2. **Vault → VSO cluster's OIDC discovery and JWKS**: The VSO API server is
+   configured as the externally reachable ServiceAccount issuer at
+   `VSO_OIDC_DISCOVERY_URL` (`https://host.containers.internal:6444` by
+   default). Vault's `auth/jwt-vso` mount retrieves the TLS-verified discovery
+   document, requires its issuer to match the JWT `iss`, follows its advertised
+   `jwks_uri`, and validates RS256 signatures plus audience and subject locally.
+   It never calls TokenReview and stores no reviewer credential. Both discovery
+   and JWKS use the stable `VSO_API_HOST_PORT` mapping and the VSO cluster CA;
+   Vault does not configure a direct `jwks_url` verification source.
 
 All of these defaults live in `scripts/lib/two-cluster-env.sh` and can be
 overridden via environment variables (`TWO_CLUSTER_HOST`, `VAULT_HOST_PORT`,
-`VAULT_NODE_PORT`, `VSO_API_HOST_PORT`, `VAULT_ADDR`, `VSO_API_ADDR`) if you
+`VAULT_NODE_PORT`, `VSO_API_HOST_PORT`, `VAULT_ADDR`, `VSO_API_ADDR`,
+`VSO_OIDC_DISCOVERY_URL`) if you
 need different port mappings, e.g. because a port is already in use on your
 host.
 

@@ -190,6 +190,29 @@ else
   fail=$((fail + 1))
 fi
 
+OIDC_RBAC_BLOCK=$(awk '
+  /name: oidc-discovery-reader$/ { in_role=1 }
+  in_role { print }
+  in_role && /^---$/ { exit }
+' "$SETUP_VSO")
+if printf '%s\n' "$OIDC_RBAC_BLOCK" | grep -qF -- '- /.well-known/openid-configuration' \
+    && printf '%s\n' "$OIDC_RBAC_BLOCK" | grep -qF -- '- /openid/v1/jwks'; then
+  echo "PASS: discovery RBAC grants both discovery metadata and JWKS paths"
+  pass=$((pass + 1))
+else
+  echo "FAIL: discovery RBAC must grant both exact OIDC endpoint paths"
+  fail=$((fail + 1))
+fi
+
+OIDC_PATH_COUNT=$(printf '%s\n' "$OIDC_RBAC_BLOCK" | grep -cE '^[[:space:]]+- /' || true)
+if [ "$OIDC_PATH_COUNT" -eq 2 ] && ! printf '%s\n' "$OIDC_RBAC_BLOCK" | grep -q '\*'; then
+  echo "PASS: discovery RBAC is limited to exactly two non-resource URLs with no wildcard"
+  pass=$((pass + 1))
+else
+  echo "FAIL: discovery RBAC is broader than the two required non-resource URLs"
+  fail=$((fail + 1))
+fi
+
 # 11. Live-cluster proof (best-effort, non-mutating): if the VSO cluster's
 #     vso-demo namespace already exists from a previous default (non-legacy)
 #     run, the vault-token-reviewer service account should not be present.

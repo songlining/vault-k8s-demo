@@ -1,5 +1,13 @@
 # VSO JWT/OIDC Auth — Spike 01: Cluster Issuer, OIDC Discovery, JWKS Reachability
 
+> **Historical record — superseded implementation:** Direct `jwks_url` was the
+> correct choice for the then-default, cluster-internal kind issuer documented
+> below. The demo later changed the VSO API server's ServiceAccount issuer and
+> advertised JWKS URI to the same externally reachable URL, making TLS-verified
+> `oidc_discovery_url` intentionally self-consistent. See
+> [`vso-oidc-discovery-handoff.md`](./vso-oidc-discovery-handoff.md). The
+> original experiment and evidence are preserved unchanged below.
+
 Investigation note for `tasks/vso-jwt-oidc-auth/01-spike-oidc-discovery-and-jwks.md`.
 Linked from `docs/vso-jwt-oidc-auth-plan.md` Phase 1.
 

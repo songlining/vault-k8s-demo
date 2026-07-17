@@ -1,6 +1,22 @@
 # VSO JWT/OIDC Auth: End-to-End Validation Evidence
 
-Status: **PASSED**. This is the completion audit for the `vso-jwt-oidc-auth`
+> **Historical validation — direct-JWKS implementation:** This evidence records
+> the previous `jwks_url` design and its then-current `default` + `mysecret`
+> token policy result. The current migration changes the VSO API server issuer
+> and advertised JWKS metadata, uses `oidc_discovery_url`, restricts signing to
+> RS256, and uses a non-renewable batch token with only `mysecret`. See
+> [`vso-oidc-discovery-handoff.md`](./vso-oidc-discovery-handoff.md). Do not read
+> the historical results below as validation of the new discovery design.
+
+**Current discovery migration status:** passed on 2026-07-17 after the
+explicitly approved recreation of only `kind-vso-lab`. The current verifier
+confirmed TLS-verified discovery metadata, external JWT issuer claims,
+RS256-only Vault configuration with no direct `jwks_url`, strict positive and
+negative login behavior, a non-renewable `mysecret`-only batch token, VSO
+sync/rotation, and unaffected sidecar/OTel paths. Detailed current evidence is
+recorded in [`vso-oidc-discovery-handoff.md`](./vso-oidc-discovery-handoff.md).
+
+Status: **PASSED (historical direct-JWKS design only)**. This is the completion audit for the `vso-jwt-oidc-auth`
 feature (task 11). It records the evidence for every exit criterion in
 `tasks/vso-jwt-oidc-auth/README.md`, run against the live two-cluster
 Podman-backed kind lab (`kind-vault-lab` / `kind-vso-lab`).

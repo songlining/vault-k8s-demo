@@ -5,27 +5,19 @@
 # scripts/lib/two-cluster-env.sh instead so every script stays in sync.
 #
 # networking.apiServerPort exposes this cluster's kube-apiserver on a stable
-# host port so Vault (running in the Vault cluster) can reach it for
-# Kubernetes auth TokenReview at https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}.
-# The certSANs patch adds ${TWO_CLUSTER_HOST} to the API server's serving
-# certificate so that address validates over TLS.
+# host port so Vault (running in the Vault cluster) can retrieve OIDC discovery
+# metadata and the advertised JWKS over TLS. The certSANs patch includes the
+# external hostname in the API server's serving certificate.
 #
-# Service account issuer / JWKS (Vault JWT/OIDC auth): this template
-# deliberately does NOT set apiServer.extraArgs.service-account-issuer or
-# service-account-jwks-uri. kubeadm's default issuer
-# (https://kubernetes.default.svc.cluster.local) is cluster-internal and
-# unreachable from the Vault cluster, but Vault's auth/jwt-vso mount does
-# not need to reach it: Vault is configured with jwks_url pointed at this
-# API server's externally-mapped address
-# (https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}/openid/v1/jwks, already
-# covered by the certSANs patch below) and bound_issuer set to the actual
-# (unreachable) iss string, which is only ever string-compared, never
-# fetched. See docs/vso-jwt-oidc-auth-spike-01.md and
-# docs/vso-jwt-oidc-auth-task-02.md for the full investigation and
-# decision record. If a future demo needs oidc_discovery_url instead of
-# jwks_url, revisit this decision - that mode does require the issuer
-# itself to be reachable and self-consistent, which would need
-# service-account-issuer/service-account-jwks-uri overrides here.
+# Kubernetes 1.36 uses kubeadm.k8s.io/v1beta4, where apiServer.extraArgs is a
+# list of name/value pairs. These arguments make the ServiceAccount issuer
+# self-consistent and externally reachable:
+#
+#   oidc_discovery_url == discovery issuer == JWT iss
+#
+# The discovery document advertises the same external API endpoint for JWKS.
+# See docs/vso-oidc-discovery-handoff.md for the migration contract and the
+# historical direct-JWKS documents for why the previous configuration differed.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ${VSO_KIND_CLUSTER_NAME}
@@ -36,9 +28,15 @@ nodes:
   - role: control-plane
     kubeadmConfigPatches:
       - |
+        apiVersion: kubeadm.k8s.io/v1beta4
         kind: ClusterConfiguration
         apiServer:
           certSANs:
             - "${TWO_CLUSTER_HOST}"
             - "localhost"
             - "127.0.0.1"
+          extraArgs:
+            - name: service-account-issuer
+              value: "https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}"
+            - name: service-account-jwks-uri
+              value: "https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}/openid/v1/jwks"

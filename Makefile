@@ -17,11 +17,17 @@
 # --------------------------------------------------------------------------
 VAULT_CONTEXT ?= kind-vault-lab
 VSO_CONTEXT ?= kind-vso-lab
-VAULT_ADDR ?= http://host.containers.internal:8200
-VSO_API_ADDR ?= https://host.containers.internal:6444
+TWO_CLUSTER_HOST ?= host.containers.internal
+VAULT_HOST_PORT ?= 8200
+VSO_API_HOST_PORT ?= 6444
+VAULT_ADDR ?= http://$(TWO_CLUSTER_HOST):$(VAULT_HOST_PORT)
+VSO_API_ADDR ?= https://$(TWO_CLUSTER_HOST):$(VSO_API_HOST_PORT)
 
 export VAULT_CONTEXT
 export VSO_CONTEXT
+export TWO_CLUSTER_HOST
+export VAULT_HOST_PORT
+export VSO_API_HOST_PORT
 export VAULT_ADDR
 export VSO_API_ADDR
 
@@ -51,7 +57,7 @@ setup-vso: ## Install VSO and create vso-demo namespace/service accounts in the 
 
 configure-vso-auth: configure-vso-jwt-auth ## Alias for configure-vso-jwt-auth (default JWT/OIDC auth setup, compatibility entry point)
 
-configure-vso-jwt-auth: ## Configure Vault's dedicated auth/jwt-vso JWT/OIDC mount against the VSO cluster's JWKS endpoint (default VSO auth setup)
+configure-vso-jwt-auth: ## Configure auth/jwt-vso through the VSO cluster's OIDC discovery URL and advertised JWKS
 	@bash scripts/configure-vso-jwt-auth.sh
 
 vso-apply: ## Apply VSO CRDs (VaultConnection/VaultAuth/VaultStaticSecret) and vso-demo-app in the VSO cluster

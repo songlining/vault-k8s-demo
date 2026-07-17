@@ -14,8 +14,9 @@
 #   - Design/plan/audit docs that still reference the old TokenReview path
 #     have a prominent "superseded on auth method" note at the top.
 #
-# "Customer-facing" docs: README.md, PODMAN_MIGRATION.md, vso-demo.sh,
-# presenterm/vso.md. These must present JWT/OIDC as the default.
+# "Customer-facing" docs: docs/vso-jwt-oidc-demo.md,
+# PODMAN_MIGRATION.md, vso-demo.sh, and presenterm/vso.md. These must present
+# JWT/OIDC as the default.
 #
 # "Historical/internal" docs: docs/vso-demo-design.md,
 # docs/vso-two-cluster-podman-plan.md, docs/vso-two-cluster-audit.md.
@@ -67,8 +68,9 @@ assert_not_contains() {
 
 # --- Customer-facing docs -----------------------------------------------------
 #
-# README.md, PODMAN_MIGRATION.md, vso-demo.sh, presenterm/vso.md must present
-# JWT/OIDC as the default VSO auth method. References to the old
+# docs/vso-jwt-oidc-demo.md, PODMAN_MIGRATION.md, vso-demo.sh, and
+# presenterm/vso.md must present JWT/OIDC as the default VSO auth method.
+# References to the old
 # auth/kubernetes-vso / TokenReview / vault-token-reviewer /
 # system:auth-delegator path are allowed only inside explicitly-labeled
 # historical/legacy-comparison sections (identified by keywords: "legacy",
@@ -76,7 +78,7 @@ assert_not_contains() {
 # "not installed by default", "superseded", "historical").
 
 CUSTOMER_DOCS=(
-  "${REPO_ROOT}/README.md"
+  "${REPO_ROOT}/docs/vso-jwt-oidc-demo.md"
   "${REPO_ROOT}/PODMAN_MIGRATION.md"
   "${REPO_ROOT}/vso-demo.sh"
   "${REPO_ROOT}/presenterm/vso.md"
@@ -133,7 +135,18 @@ for doc in "${CUSTOMER_DOCS[@]}"; do
     "$contents" 'subject'
 done
 
-# --- 4. Customer-facing docs: old path terms appear only in legacy context --
+# --- 4. Customer-facing docs describe the discovery chain -------------------
+
+for doc in "${CUSTOMER_DOCS[@]}"; do
+  doc_name="$(basename "$doc")"
+  contents="$(cat "$doc")"
+
+  assert_contains "$doc_name explains OIDC discovery" "$contents" 'discovery'
+  assert_contains "$doc_name explains the advertised JWKS" "$contents" 'advertised'
+  assert_contains "$doc_name documents RS256 restriction" "$contents" 'RS256'
+done
+
+# --- 5. Customer-facing docs: old path terms appear only in legacy context --
 #
 # For each customer-facing doc, every line mentioning auth/kubernetes-vso,
 # vault-token-reviewer, or system:auth-delegator must be within a legacy
@@ -175,7 +188,7 @@ for doc in "${CUSTOMER_DOCS[@]}"; do
   fi
 done
 
-# --- 5. Customer-facing docs: TokenReview mentions are in comparison context -
+# --- 6. Customer-facing docs: TokenReview mentions are in comparison context -
 #
 # TokenReview is a legitimate term for the same-cluster auth/kubernetes path
 # (used by the Agent Injector/OTel demo). But when it appears alongside VSO
@@ -220,7 +233,7 @@ for doc in "${CUSTOMER_DOCS[@]}"; do
   fi
 done
 
-# --- 6. Historical/internal docs have superseded auth notes ------------------
+# --- 7. Historical/internal docs have superseded auth notes ------------------
 #
 # docs/vso-demo-design.md, docs/vso-two-cluster-podman-plan.md, and
 # docs/vso-two-cluster-audit.md are design/audit records that still describe
@@ -254,6 +267,22 @@ for doc in "${HISTORICAL_DOCS[@]}"; do
   assert_contains \
     "$doc_name superseded note references vso-jwt-oidc-auth-plan" \
     "$head_contents" 'vso-jwt-oidc-auth-plan.md'
+done
+
+# --- 8. Direct-JWKS implementation records carry discovery follow-up notes ---
+
+DISCOVERY_HISTORICAL_DOCS=(
+  "${REPO_ROOT}/docs/vso-jwt-oidc-auth-spike-01.md"
+  "${REPO_ROOT}/docs/vso-jwt-oidc-auth-task-02.md"
+  "${REPO_ROOT}/docs/vso-jwt-oidc-auth-plan.md"
+  "${REPO_ROOT}/docs/vso-jwt-oidc-auth-e2e-validation.md"
+)
+
+for doc in "${DISCOVERY_HISTORICAL_DOCS[@]}"; do
+  head_contents="$(head -20 "$doc")"
+  assert_contains "$doc has a historical/superseded note" "$head_contents" 'Historical'
+  assert_contains "$doc links to the OIDC discovery handoff" "$head_contents" 'vso-oidc-discovery-handoff.md'
+  assert_contains "$doc explains the old direct JWKS context" "$head_contents" 'jwks_url'
 done
 
 echo ""

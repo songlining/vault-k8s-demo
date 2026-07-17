@@ -1,5 +1,13 @@
 # VSO JWT/OIDC Auth — Task 02: kind VSO Cluster Issuer/JWKS Configuration
 
+> **Historical record — superseded implementation:** The no-change decision
+> below was correct while kind used its cluster-internal default issuer and the
+> demo configured Vault with direct `jwks_url`. The later OIDC-discovery
+> migration intentionally configures an externally reachable ServiceAccount
+> issuer and advertised JWKS URI in the VSO kind template. See
+> [`vso-oidc-discovery-handoff.md`](./vso-oidc-discovery-handoff.md). The
+> original decision record remains unchanged below.
+
 Evidence and decision record for
 `tasks/vso-jwt-oidc-auth/02-configure-kind-oidc-issuer.md`.
 Builds directly on

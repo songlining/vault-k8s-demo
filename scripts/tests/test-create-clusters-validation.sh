@@ -82,7 +82,36 @@ assert_fail_contains \
   "unknown argument" \
   env KIND_EXPERIMENTAL_PROVIDER=podman "$CREATE_CLUSTERS" --not-a-real-flag
 
-# 5. Happy path: real PATH, provider set, --check-only never touches clusters.
+# 5. Existing VSO clusters are checked for creation-time OIDC drift and are
+#    never deleted automatically.
+if grep -qF -- "--raw='/.well-known/openid-configuration'" "$CREATE_CLUSTERS" \
+    && grep -qF 'does not have the required' "$CREATE_CLUSTERS"; then
+  echo "PASS: reused VSO clusters are checked for discovery issuer/JWKS drift"
+  pass=$((pass + 1))
+else
+  echo "FAIL: create-clusters.sh does not reject stale pre-discovery VSO clusters"
+  fail=$((fail + 1))
+fi
+
+if grep -qF 'This does not prove creation-time issuer drift' "$CREATE_CLUSTERS" \
+    && grep -qF 'do not recreate the cluster' "$CREATE_CLUSTERS"; then
+  echo "PASS: discovery retrieval failures are distinguished from verified issuer drift"
+  pass=$((pass + 1))
+else
+  echo "FAIL: transient discovery retrieval failures may be misdiagnosed as stale clusters"
+  fail=$((fail + 1))
+fi
+
+if grep -qF 'this script will never delete it automatically' "$CREATE_CLUSTERS" \
+    && ! grep -qE '^[[:space:]]*(KIND_EXPERIMENTAL_PROVIDER=podman[[:space:]]+)?kind delete cluster' "$CREATE_CLUSTERS"; then
+  echo "PASS: stale-cluster handling requires explicit recreation and never auto-deletes"
+  pass=$((pass + 1))
+else
+  echo "FAIL: stale-cluster handling may auto-delete the VSO cluster"
+  fail=$((fail + 1))
+fi
+
+# 6. Happy path: real PATH, provider set, --check-only never touches clusters.
 if command -v kind >/dev/null 2>&1 && command -v kubectl >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then
   assert_success \
     "--check-only succeeds when tools and provider are present" \

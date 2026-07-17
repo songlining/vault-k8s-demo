@@ -186,6 +186,22 @@ assert_contains \
   "deck references JWT/OIDC auth method" \
   "$DECK_CONTENTS" 'JWT/OIDC'
 
+assert_contains \
+  "deck shows the OIDC discovery endpoint" \
+  "$DECK_CONTENTS" '/.well-known/openid-configuration'
+
+assert_contains \
+  "deck shows Vault's oidc_discovery_url config" \
+  "$DECK_CONTENTS" 'oidc_discovery_url'
+
+assert_contains \
+  "deck shows the advertised JWKS URI" \
+  "$DECK_CONTENTS" 'jwks_uri'
+
+assert_contains \
+  "deck shows the RS256 algorithm restriction" \
+  "$DECK_CONTENTS" 'RS256'
+
 # The deck must NOT present auth/kubernetes-vso as the default VSO auth.
 # Any mention must be in a legacy/comparison context.
 if printf '%s' "$DECK_CONTENTS" | grep -q 'auth/kubernetes-vso'; then
@@ -248,6 +264,12 @@ if [ -z "$raw_jwt_echoes" ]; then
 else
   assert_fail "found a raw \$JWT echo in an +exec block:"
   echo "$raw_jwt_echoes" | sed 's/^/  /'
+fi
+
+if printf '%s' "$DECK_CONTENTS" | grep -qE 'jwt=.*\$JWT'; then
+  assert_fail "deck passes a complete JWT as a kubectl exec argument"
+else
+  assert_pass "deck sends JWTs over stdin with jwt=-"
 fi
 
 # --- 8. Box-drawing characters are inside fenced code blocks -----------------

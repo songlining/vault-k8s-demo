@@ -1,22 +1,14 @@
 #!/usr/bin/env bash
 # scripts/tests/test-vso-lab-kind-config-validation.sh
 #
-# Unit test for tasks/vso-jwt-oidc-auth/02-configure-kind-oidc-issuer.md.
+# Static contract for the externally reachable ServiceAccount OIDC issuer
+# described in docs/vso-oidc-discovery-handoff.md. It asserts that:
 #
-# Phase 1 (docs/vso-jwt-oidc-auth-spike-01.md) proved that Vault's
-# auth/jwt-vso mount can use jwks_url + bound_issuer against the VSO
-# cluster's default kind service account issuer, without any kind API
-# server issuer/JWKS override. This test locks in that decision (see
-# docs/vso-jwt-oidc-auth-task-02.md) by asserting:
-#
-#   1. scripts/kind/vso-lab-config.yaml.tmpl does NOT set
-#      apiServer.extraArgs.service-account-issuer or
-#      service-account-jwks-uri (no unexpected reconfiguration).
-#   2. The template still has the certSANs entry for ${TWO_CLUSTER_HOST}
-#      and the apiServerPort mapping to ${VSO_API_HOST_PORT} - the two
-#      things the jwks_url reachability plan actually depends on.
-#   3. Both scripts/create-clusters.sh and the template reference the
-#      decision doc(s) in their comments, so the "why" stays discoverable.
+#   1. The kubeadm v1beta4 API-server config sets the external issuer and
+#      advertised JWKS URI using the list-of-name/value extraArgs schema.
+#   2. The template retains the external hostname certificate SAN and stable
+#      API-server host-port mapping needed for TLS-verified discovery.
+#   3. The implementation comments link back to the discovery handoff.
 #
 # This is a static/text validation test only - it never creates or
 # mutates a kind cluster.
@@ -59,16 +51,30 @@ if [ ! -f "$VSO_TEMPLATE" ]; then
   echo "FAIL: expected file not found: $VSO_TEMPLATE"
   fail=$((fail + 1))
 else
-  # 1. No service account issuer/JWKS API server overrides - the "not
-  #    required" decision from tasks 01/02.
-  assert_not_contains \
-    "vso-lab-config.yaml.tmpl does not set service-account-issuer" \
-    '^\s*service-account-issuer:' \
+  # 1. kubeadm v1beta4 represents API-server extraArgs as a list.
+  assert_contains \
+    "vso-lab-config.yaml.tmpl uses kubeadm v1beta4" \
+    'apiVersion: kubeadm.k8s.io/v1beta4' \
     "$VSO_TEMPLATE"
 
-  assert_not_contains \
-    "vso-lab-config.yaml.tmpl does not set service-account-jwks-uri" \
-    '^\s*service-account-jwks-uri:' \
+  assert_contains \
+    "vso-lab-config.yaml.tmpl sets the externally reachable service-account issuer" \
+    'name: service-account-issuer' \
+    "$VSO_TEMPLATE"
+
+  assert_contains \
+    "vso-lab-config.yaml.tmpl renders the issuer from host and stable API port" \
+    'value: "https://\$\{TWO_CLUSTER_HOST\}:\$\{VSO_API_HOST_PORT\}"' \
+    "$VSO_TEMPLATE"
+
+  assert_contains \
+    "vso-lab-config.yaml.tmpl sets the advertised service-account JWKS URI" \
+    'name: service-account-jwks-uri' \
+    "$VSO_TEMPLATE"
+
+  assert_contains \
+    "vso-lab-config.yaml.tmpl advertises the external JWKS endpoint" \
+    'value: "https://\$\{TWO_CLUSTER_HOST\}:\$\{VSO_API_HOST_PORT\}/openid/v1/jwks"' \
     "$VSO_TEMPLATE"
 
   # 2. Reachability-critical config still present: certSANs for
@@ -85,8 +91,8 @@ else
 
   # 3. Decision is documented in-place, not just in a separate doc.
   assert_contains \
-    "vso-lab-config.yaml.tmpl references the issuer/JWKS decision doc" \
-    "vso-jwt-oidc-auth-task-02.md" \
+    "vso-lab-config.yaml.tmpl references the OIDC discovery handoff" \
+    "vso-oidc-discovery-handoff.md" \
     "$VSO_TEMPLATE"
 fi
 
@@ -95,13 +101,18 @@ if [ ! -f "$CREATE_CLUSTERS" ]; then
   fail=$((fail + 1))
 else
   assert_contains \
-    "create-clusters.sh references the issuer/JWKS decision doc" \
-    "vso-jwt-oidc-auth-task-02.md" \
+    "create-clusters.sh references the OIDC discovery handoff" \
+    "vso-oidc-discovery-handoff.md" \
     "$CREATE_CLUSTERS"
 
-  assert_not_contains \
-    "create-clusters.sh does not render service-account-issuer args" \
-    'service-account-issuer=' \
+  assert_contains \
+    "create-clusters.sh renders the external host placeholder" \
+    'TWO_CLUSTER_HOST' \
+    "$CREATE_CLUSTERS"
+
+  assert_contains \
+    "create-clusters.sh renders the stable VSO API port placeholder" \
+    'VSO_API_HOST_PORT' \
     "$CREATE_CLUSTERS"
 fi
 

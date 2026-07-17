@@ -152,8 +152,8 @@ What we will prove:
      VSO cluster.
   4. A plain pod in the VSO cluster consumes it with zero Vault configuration.
   5. The operator's Vault identity is least-privilege and authenticates via
-     JWT/OIDC: Vault validates the SA JWT's signature against the VSO
-     cluster's own JWKS, then strictly checks issuer, audience, and subject
+     JWT/OIDC: Vault retrieves TLS-verified discovery metadata, follows its
+     advertised JWKS URI, then strictly checks issuer, audience, and subject
      claims -- no reviewer credential stored in Vault.
   6. A wrong-audience JWT and a wrong-service-account JWT are both correctly
      rejected by Vault.
@@ -192,15 +192,15 @@ cat <<DIAGRAM
      ${VAULT_ADDR}   <----- reached by ---- (spec.address above)
                                          K8s Secret: ${SECRET_NAME}
                                            <----- synced by VSO -----
-     VSO cluster JWKS (fetched once):    App Pod: ${APP_POD}
-     ${VSO_API_ADDR}   ----> Vault verifies SA JWTs' signature + claims locally
+     VSO OIDC discovery + JWKS:          App Pod: ${APP_POD}
+     ${VSO_OIDC_DISCOVERY_URL} ----> Vault discovers keys + verifies claims
                                            (no Vault config at all)
 
   Vault never runs in the VSO cluster. VSO, its CRDs, and the app pod never
   run in the Vault cluster. The only link between them is the network path
-  above: VaultConnection reaches Vault's external address, and Vault fetches
-  the VSO cluster's public JWKS to validate JWTs cryptographically -- it
-  never calls back into the VSO cluster's API server to do so.
+  above: VaultConnection reaches Vault's external address, while Vault reads
+  the VSO cluster's discovery document and advertised public JWKS to validate
+  JWTs locally -- it never uses the TokenReview API.
 DIAGRAM
 pause
 
@@ -217,10 +217,9 @@ cat <<STEPS
   kind-vault-lab: Vault (${VAULT_POD})
               auth/${VSO_JWT_AUTH_MOUNT} (JWT/OIDC) -- role: ${VSO_JWT_AUTH_ROLE} -- policy: mysecret
               kv-v2/vault-demo/mysecret
-        |  (3) Vault verifies the JWT locally: signature checked against
-        |      the VSO cluster's JWKS (${VSO_API_ADDR}), then
-        |      issuer/audience/subject claims checked against the role's
-        |      strict bindings. No callback, no reviewer JWT.
+        |  (3) Vault fetches OIDC discovery at ${VSO_OIDC_DISCOVERY_URL},
+        |      follows its advertised JWKS URI, verifies the RS256 signature,
+        |      then enforces issuer/audience/subject. No TokenReview or reviewer JWT.
         |  (4) on success: writes / refreshes every 30s
         v
   kind-vso-lab: Secret ${SECRET_NAME}   (native K8s Secret)
@@ -323,8 +322,11 @@ Key points:
 POINTS
 pause
 
-section "6. Least-privilege Vault identity: JWT/OIDC with strict claim binding (Vault cluster)"
-p "VSO authenticates via JWT/OIDC -- the role strictly binds issuer, audience, and subject"
+section "6. Least-privilege Vault identity: OIDC discovery with strict JWT binding (Vault cluster)"
+p "Vault uses OIDC discovery, follows its advertised JWKS, and accepts RS256 only"
+pe "kubectl --context ${VAULT_CONTEXT} exec ${VAULT_POD} -n ${NAMESPACE} -- vault read -format=json auth/${VSO_JWT_AUTH_MOUNT}/config | jq '{oidc_discovery_url: .data.oidc_discovery_url, bound_issuer: .data.bound_issuer, jwt_supported_algs: .data.jwt_supported_algs, jwks_url: .data.jwks_url}'"
+
+p "The role strictly binds audience and subject and suppresses the default policy"
 pe "kubectl --context ${VAULT_CONTEXT} exec ${VAULT_POD} -n ${NAMESPACE} -- vault read auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE} | grep -E 'bound_audiences|bound_subject|token_policies|policies'"
 
 p "The mysecret policy only allows reading this one KV path"
@@ -333,31 +335,33 @@ pe "kubectl --context ${VAULT_CONTEXT} exec ${VAULT_POD} -n ${NAMESPACE} -- vaul
 cat <<POINTS
 Key points:
   - auth/${VSO_JWT_AUTH_MOUNT} is a JWT/OIDC mount dedicated to the VSO
-    cluster -- completely separate from the same-cluster auth/kubernetes
+    cluster. Its discovery URL equals the JWT issuer; discovery advertises the
+    external JWKS URI; signing is restricted to RS256. It is separate from the same-cluster auth/kubernetes
     mount used by the Agent Injector/OTel demo paths. No reviewer service
     account, no token_reviewer_jwt, ever stored in Vault.
   - The role only accepts JWTs whose audience is "${VSO_JWT_AUDIENCE}" and
     whose subject is exactly
     system:serviceaccount:${VSO_NAMESPACE}:vso-demo (in the VSO cluster).
-  - The policy grants read on a single KV path and nothing else.
+  - The role issues a non-renewable batch token with only mysecret; VSO
+    re-authenticates instead of requiring the default policy's renew-self capability.
 POINTS
 pause
 
 section "6b. Proof: correct JWT logs in, wrong audience/service account do not"
 p "Mint a correct JWT for vso-demo (audience: ${VSO_JWT_AUDIENCE}) and log in"
-pe "JWT=\$(kubectl --context ${VSO_CONTEXT} create token vso-demo -n ${VSO_NAMESPACE} --audience ${VSO_JWT_AUDIENCE}); kubectl --context ${VAULT_CONTEXT} exec ${VAULT_POD} -n ${NAMESPACE} -- vault write auth/${VSO_JWT_AUTH_MOUNT}/login role=${VSO_JWT_AUTH_ROLE} jwt=\"\$JWT\" | grep -E 'token |policies'; unset JWT"
+pe "JWT=\$(kubectl --context ${VSO_CONTEXT} create token vso-demo -n ${VSO_NAMESPACE} --audience ${VSO_JWT_AUDIENCE}); printf '%s' \"\$JWT\" | kubectl --context ${VAULT_CONTEXT} exec -i ${VAULT_POD} -n ${NAMESPACE} -- vault write auth/${VSO_JWT_AUTH_MOUNT}/login role=${VSO_JWT_AUTH_ROLE} jwt=- | grep -E 'token |policies'; unset JWT"
 
 p "A JWT minted for the WRONG audience is rejected"
-pe "JWT=\$(kubectl --context ${VSO_CONTEXT} create token vso-demo -n ${VSO_NAMESPACE} --audience not-${VSO_JWT_AUDIENCE}); kubectl --context ${VAULT_CONTEXT} exec ${VAULT_POD} -n ${NAMESPACE} -- vault write auth/${VSO_JWT_AUTH_MOUNT}/login role=${VSO_JWT_AUTH_ROLE} jwt=\"\$JWT\" >/dev/null 2>&1 && echo '  UNEXPECTED: login succeeded' || echo '  -> correctly rejected (wrong audience)'; unset JWT"
+pe "JWT=\$(kubectl --context ${VSO_CONTEXT} create token vso-demo -n ${VSO_NAMESPACE} --audience not-${VSO_JWT_AUDIENCE}); printf '%s' \"\$JWT\" | kubectl --context ${VAULT_CONTEXT} exec -i ${VAULT_POD} -n ${NAMESPACE} -- vault write auth/${VSO_JWT_AUTH_MOUNT}/login role=${VSO_JWT_AUTH_ROLE} jwt=- >/dev/null 2>&1 && echo '  UNEXPECTED: login succeeded' || echo '  -> correctly rejected (wrong audience)'; unset JWT"
 
 p "A JWT minted for the WRONG service account (default, not vso-demo) is rejected"
-pe "JWT=\$(kubectl --context ${VSO_CONTEXT} create token default -n ${VSO_NAMESPACE} --audience ${VSO_JWT_AUDIENCE}); kubectl --context ${VAULT_CONTEXT} exec ${VAULT_POD} -n ${NAMESPACE} -- vault write auth/${VSO_JWT_AUTH_MOUNT}/login role=${VSO_JWT_AUTH_ROLE} jwt=\"\$JWT\" >/dev/null 2>&1 && echo '  UNEXPECTED: login succeeded' || echo '  -> correctly rejected (wrong service account)'; unset JWT"
+pe "JWT=\$(kubectl --context ${VSO_CONTEXT} create token default -n ${VSO_NAMESPACE} --audience ${VSO_JWT_AUDIENCE}); printf '%s' \"\$JWT\" | kubectl --context ${VAULT_CONTEXT} exec -i ${VAULT_POD} -n ${NAMESPACE} -- vault write auth/${VSO_JWT_AUTH_MOUNT}/login role=${VSO_JWT_AUTH_ROLE} jwt=- >/dev/null 2>&1 && echo '  UNEXPECTED: login succeeded' || echo '  -> correctly rejected (wrong service account)'; unset JWT"
 
 cat <<'POINTS'
 Key points:
   - Vault never asks the VSO cluster "is this token still valid?" -- it
-    verifies the JWT's signature against the cluster's own JWKS and then
-    checks the claims itself.
+    discovers the public-key URI, verifies the RS256 signature, and checks the
+    claims locally.
   - Wrong audience and wrong service account are both rejected before Vault
     ever looks at policies -- the claim binding is enforced, not just
     configured.

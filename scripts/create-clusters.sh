@@ -12,22 +12,14 @@
 # VSO, or any demo workloads - see scripts/setup-vault-cluster.sh and
 # scripts/setup-vso-cluster.sh for that.
 #
-# Service account issuer / JWKS (Vault JWT/OIDC auth for VSO):
-#   Neither kind config template overrides kubeadm's default
-#   `service-account-issuer` (both clusters keep the default
-#   https://kubernetes.default.svc.cluster.local `iss` claim, which is
-#   cluster-internal and NOT reachable cross-cluster). This is intentional,
-#   not an oversight - see docs/vso-jwt-oidc-auth-spike-01.md and
-#   docs/vso-jwt-oidc-auth-task-02.md. Vault's `auth/jwt-vso` mount is
-#   instead configured with `jwks_url` pointed at the VSO cluster's
-#   externally-mapped API server address
-#   (https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}/openid/v1/jwks, TLS
-#   trust via the VSO cluster CA) plus `bound_issuer` set to the actual
-#   (cluster-internal, non-reachable) `iss` string, which Vault only string-
-#   compares and never fetches. This avoids any kind/kubeadm
-#   `service-account-issuer`/`service-account-jwks-uri` API server flag
-#   changes and keeps both kind config templates on kubeadm defaults for
-#   this concern.
+# ServiceAccount OIDC issuer (Vault JWT/OIDC auth for VSO):
+#   The VSO kind template configures its API server as a self-consistent,
+#   externally reachable issuer at
+#   https://${TWO_CLUSTER_HOST}:${VSO_API_HOST_PORT}. The JWT `iss`, discovery
+#   document `issuer`, Vault `oidc_discovery_url`, and advertised external JWKS
+#   endpoint therefore agree. Only the VSO cluster changes; the Vault cluster's
+#   same-cluster Kubernetes auth remains on kubeadm defaults. See
+#   docs/vso-oidc-discovery-handoff.md.
 #
 # Usage:
 #   KIND_EXPERIMENTAL_PROVIDER=podman scripts/create-clusters.sh
@@ -93,6 +85,7 @@ require_podman_machine_running() {
 fail=0
 require_commands kind kubectl podman || fail=1
 require_podman_provider || fail=1
+validate_vso_oidc_env || fail=1
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
@@ -155,7 +148,7 @@ create_or_reuse_cluster() {
 }
 
 echo "Vault cluster:  ${VAULT_KIND_CLUSTER_NAME} (context ${VAULT_CONTEXT}), Vault host port ${VAULT_HOST_PORT} -> NodePort ${VAULT_NODE_PORT}"
-echo "VSO cluster:    ${VSO_KIND_CLUSTER_NAME} (context ${VSO_CONTEXT}), API server host port ${VSO_API_HOST_PORT}, certSAN ${TWO_CLUSTER_HOST}"
+echo "VSO cluster:    ${VSO_KIND_CLUSTER_NAME} (context ${VSO_CONTEXT}), OIDC issuer ${VSO_OIDC_DISCOVERY_URL}, certSAN ${TWO_CLUSTER_HOST}"
 echo ""
 
 create_or_reuse_cluster "$VAULT_KIND_CLUSTER_NAME" "$VAULT_KIND_CONFIG"
@@ -178,6 +171,42 @@ done
 if [ "$missing_context" -ne 0 ]; then
   exit 1
 fi
+
+# A kind cluster's ServiceAccount issuer is fixed when kube-apiserver starts.
+# Never silently reuse a pre-discovery VSO cluster: setup cannot repair that
+# control-plane drift, and automatic deletion would destroy user resources.
+if ! VSO_DISCOVERY_DOCUMENT=$(kubectl --context "$VSO_CONTEXT" get \
+    --raw='/.well-known/openid-configuration' 2>/dev/null); then
+  echo "ERROR: could not retrieve OIDC discovery metadata from context '${VSO_CONTEXT}'." >&2
+  echo "       Check the API server, kubeconfig context, and authorization before retrying." >&2
+  echo "       This does not prove creation-time issuer drift; do not recreate the cluster" >&2
+  echo "       based on this retrieval failure alone." >&2
+  exit 1
+fi
+COMPACT_VSO_DISCOVERY=$(printf '%s' "$VSO_DISCOVERY_DOCUMENT" | tr -d '[:space:]')
+if ! printf '%s' "$COMPACT_VSO_DISCOVERY" | grep -qF '"issuer":' \
+    || ! printf '%s' "$COMPACT_VSO_DISCOVERY" | grep -qF '"jwks_uri":'; then
+  echo "ERROR: VSO OIDC discovery response is missing issuer or jwks_uri metadata." >&2
+  echo "       Inspect the API server response; this is not proof that recreation is required." >&2
+  unset VSO_DISCOVERY_DOCUMENT COMPACT_VSO_DISCOVERY
+  exit 1
+fi
+if ! printf '%s' "$COMPACT_VSO_DISCOVERY" | grep -qF \
+    "\"issuer\":\"${VSO_OIDC_DISCOVERY_URL}\"" \
+    || ! printf '%s' "$COMPACT_VSO_DISCOVERY" | grep -qF \
+    "\"jwks_uri\":\"${VSO_OIDC_JWKS_URL}\""; then
+  echo "ERROR: existing VSO cluster '${VSO_KIND_CLUSTER_NAME}' does not have the required" >&2
+  echo "       externally reachable ServiceAccount OIDC issuer/JWKS metadata." >&2
+  echo "       Expected issuer:   ${VSO_OIDC_DISCOVERY_URL}" >&2
+  echo "       Expected jwks_uri: ${VSO_OIDC_JWKS_URL}" >&2
+  echo "       This creation-time setting cannot be reconciled in place." >&2
+  echo "       Recreate only '${VSO_KIND_CLUSTER_NAME}' after explicit confirmation;" >&2
+  echo "       this script will never delete it automatically." >&2
+  unset VSO_DISCOVERY_DOCUMENT COMPACT_VSO_DISCOVERY
+  exit 1
+fi
+unset VSO_DISCOVERY_DOCUMENT COMPACT_VSO_DISCOVERY
+echo "OK: VSO cluster discovery issuer and advertised JWKS URI match the expected external endpoint."
 
 echo ""
 echo "Both clusters are ready. This script does not change your current"

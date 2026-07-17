@@ -3,10 +3,9 @@
 #
 # Configures Vault's dedicated JWT/OIDC auth mount (auth/${VSO_JWT_AUTH_MOUNT},
 # default auth/jwt-vso) in the Vault cluster (VAULT_CONTEXT, default
-# kind-vault-lab) so it can validate VSO service account JWTs *directly*,
-# using the VSO cluster's (VSO_CONTEXT, default kind-vso-lab) JWKS signing
-# keys -- with no TokenReview call back to the VSO cluster's API server, and
-# no reviewer JWT stored in Vault.
+# kind-vault-lab) so it can validate VSO service account JWTs through the VSO
+# cluster's externally reachable OIDC discovery document and advertised JWKS
+# signing keys -- with no TokenReview callback and no reviewer JWT in Vault.
 #
 # This replaces the TokenReview-based auth/${VSO_AUTH_MOUNT} (default
 # auth/kubernetes-vso) pattern configured by
@@ -15,46 +14,36 @@
 # the full design/decision record.
 #
 # What this script does, all idempotently:
-#   - Reads the VSO cluster's CA certificate (pulled live from the VSO
-#     cluster's kubeconfig entry, same source as
-#     scripts/configure-vso-kubernetes-auth.sh) so Vault can validate TLS
-#     when fetching JWKS.
+#   - Reads the VSO cluster's CA certificate from kubeconfig so Vault can
+#     validate TLS while fetching discovery metadata and the advertised JWKS.
 #   - Enables `auth/${VSO_JWT_AUTH_MOUNT}` in the Vault cluster as a Vault
 #     `jwt` auth method, if not already enabled -- leaves the pre-existing
 #     same-cluster `auth/kubernetes` mount (Agent Injector/OTel demo paths)
 #     and the (migration-compatibility) `auth/${VSO_AUTH_MOUNT}` mount
 #     completely untouched.
 #   - Writes/updates `auth/${VSO_JWT_AUTH_MOUNT}/config` with:
-#       jwks_url    = ${VSO_OIDC_JWKS_URL} (externally-reachable JWKS
-#                     endpoint on the VSO cluster's API server)
-#       jwks_ca_pem = the VSO cluster CA
-#       bound_issuer = ${VSO_OIDC_ISSUER} (a plain string compare against
-#                      the JWT's `iss` claim -- not fetched/resolved)
-#     Per the Phase 1 spike decision (docs/vso-jwt-oidc-auth-spike-01.md),
-#     `jwks_url` is used rather than `oidc_discovery_url`: the VSO cluster's
-#     default kind issuer is cluster-internal and its self-advertised
-#     `jwks_uri` is a Podman-bridge IP, neither reachable from the Vault
-#     cluster, whereas the externally-mapped JWKS endpoint is proven
-#     reachable.
+#       oidc_discovery_url    = ${VSO_OIDC_DISCOVERY_URL}
+#       oidc_discovery_ca_pem = the VSO cluster CA
+#       bound_issuer          = ${VSO_OIDC_ISSUER}
+#       jwt_supported_algs    = RS256
+#     The VSO API server's discovery metadata advertises the externally
+#     reachable ${VSO_OIDC_JWKS_URL}; direct `jwks_url` mode is not configured.
 #   - Writes/updates `auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}`,
 #     strictly bound to:
 #       role_type       = jwt
 #       user_claim      = sub
 #       bound_audiences = ${VSO_JWT_AUDIENCE}
 #       bound_subject   = system:serviceaccount:${VSO_NAMESPACE}:vso-demo
-#     granting only the `mysecret` policy -- no reviewer identity, no
-#     `token_reviewer_jwt`, and no loose claim binding (this script never
+#     granting only the `mysecret` policy through a non-renewable batch token.
+#     Batch tokens prevent VSO from calling auth/token/renew-self, which would
+#     otherwise require Vault's broad default policy. There is no reviewer
+#     identity, no `token_reviewer_jwt`, and no loose claim binding (this script never
 #     accepts "any token from the issuer" or "any token with the right
 #     audience" -- both issuer and audience and subject must match).
 #
-# Prerequisite (documented, not yet automated by this script): the VSO
-# cluster's API server must grant unauthenticated GET access to
-# `/openid/v1/jwks` (and `/.well-known/openid-configuration`) for Vault's
-# JWKS fetch to succeed -- default kind/kubeadm RBAC does not grant this by
-# default. See docs/vso-jwt-oidc-auth-spike-01.md for the
-# `oidc-discovery-reader` ClusterRole/ClusterRoleBinding; formalizing this
-# into scripts/setup-vso-cluster.sh is tracked separately
-# (tasks/vso-jwt-oidc-auth/05-refactor-vso-cluster-setup.md).
+# Prerequisite: scripts/setup-vso-cluster.sh grants unauthenticated GET access
+# to exactly `/.well-known/openid-configuration` and `/openid/v1/jwks`, because
+# Vault's discovery client fetches both documents without a Kubernetes token.
 #
 # Usage:
 #   scripts/configure-vso-jwt-auth.sh
@@ -62,7 +51,8 @@
 #
 # Env overrides live in scripts/lib/two-cluster-env.sh (VAULT_CONTEXT,
 # VSO_CONTEXT, VSO_NAMESPACE, VSO_JWT_AUTH_MOUNT, VSO_JWT_AUTH_ROLE,
-# VSO_JWT_AUDIENCE, VSO_OIDC_ISSUER, VSO_OIDC_JWKS_URL).
+# VSO_JWT_AUDIENCE, VSO_OIDC_DISCOVERY_URL, VSO_OIDC_ISSUER,
+# VSO_OIDC_JWKS_URL).
 
 set -euo pipefail
 
@@ -96,6 +86,10 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
+if ! validate_vso_oidc_env; then
+  exit 1
+fi
+
 if [ "$CHECK_ONLY" -eq 1 ]; then
   echo "OK: required commands present and VAULT_CONTEXT/VSO_CONTEXT both exist and differ."
   exit 0
@@ -103,7 +97,7 @@ fi
 
 echo "==> Configuring Vault JWT/OIDC auth for VSO service account tokens"
 echo "    Vault cluster (auth host): ${VAULT_CONTEXT}"
-echo "    VSO cluster (JWKS source): ${VSO_CONTEXT}"
+echo "    VSO cluster (OIDC issuer): ${VSO_CONTEXT}"
 echo "    Auth mount:                auth/${VSO_JWT_AUTH_MOUNT}"
 echo ""
 
@@ -131,7 +125,8 @@ fi
 # works), rather than extracting it from inside a pod. This is the CA that
 # signs the VSO cluster's API server certificate, whose SANs include
 # TWO_CLUSTER_HOST (see scripts/kind/vso-lab-config.yaml.tmpl), which is
-# what makes ${VSO_OIDC_JWKS_URL} reachable and TLS-verifiable from Vault.
+# what makes ${VSO_OIDC_DISCOVERY_URL} and its advertised JWKS URI reachable
+# and TLS-verifiable from Vault.
 
 echo "==> Reading API server CA for context '${VSO_CONTEXT}'..."
 
@@ -178,7 +173,7 @@ else
   # step stays truly idempotent under concurrency.
   set +e
   ENABLE_OUTPUT=$(kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- \
-    vault auth enable -path="${VSO_JWT_AUTH_MOUNT}" -description="JWT/OIDC auth validated directly against the VSO cluster (${VSO_CONTEXT}) JWKS -- no TokenReview, no reviewer JWT" \
+    vault auth enable -path="${VSO_JWT_AUTH_MOUNT}" -description="JWT/OIDC auth via VSO cluster (${VSO_CONTEXT}) discovery and advertised JWKS -- no TokenReview, no reviewer JWT" \
     jwt 2>&1)
   ENABLE_EXIT=$?
   set -e
@@ -195,24 +190,24 @@ else
   fi
 fi
 
+# Refresh the description even when the mount predates discovery mode.
+VSO_JWT_MOUNT_DESCRIPTION="JWT/OIDC auth via VSO cluster (${VSO_CONTEXT}) discovery and advertised JWKS -- no TokenReview, no reviewer JWT"
+kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault auth tune \
+  -description="$VSO_JWT_MOUNT_DESCRIPTION" "${VSO_JWT_AUTH_MOUNT}/" >/dev/null
+unset VSO_JWT_MOUNT_DESCRIPTION
+
 # --- Configure auth/${VSO_JWT_AUTH_MOUNT}/config -----------------------------
 #
-# jwks_url mode (not oidc_discovery_url): per the Phase 1 spike decision,
-# Vault fetches signing keys directly from VSO_OIDC_JWKS_URL and never
-# fetches or trusts the VSO cluster's self-reported OIDC discovery document
-# (whose issuer/jwks_uri fields are cluster-internal-only). bound_issuer is
-# a pure string comparison against the token's `iss` claim, so it is safe to
-# set to that cluster-internal value even though it is not itself
-# reachable/resolvable from the Vault cluster.
-#
-# Deliberately never writes token_reviewer_jwt: this mount has no reviewer
-# identity at all.
+# Discovery is the sole JWT verification source. Vault fetches
+# `/.well-known/openid-configuration`, validates its issuer, then follows the
+# advertised `jwks_uri`. Deliberately never writes token_reviewer_jwt.
 
 echo "==> Writing auth/${VSO_JWT_AUTH_MOUNT}/config..."
 kubectl_vault exec -i "$VAULT_POD" -n "$NAMESPACE" -- vault write "auth/${VSO_JWT_AUTH_MOUNT}/config" \
-  jwks_url="${VSO_OIDC_JWKS_URL}" \
-  jwks_ca_pem="${VSO_CA_PEM}" \
-  bound_issuer="${VSO_OIDC_ISSUER}"
+  oidc_discovery_url="${VSO_OIDC_DISCOVERY_URL}" \
+  oidc_discovery_ca_pem="${VSO_CA_PEM}" \
+  bound_issuer="${VSO_OIDC_ISSUER}" \
+  jwt_supported_algs=RS256
 
 # --- Write the vso-demo JWT role ---------------------------------------------
 #
@@ -235,6 +230,8 @@ kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault write "auth/${VSO_JWT_A
   bound_audiences="${VSO_JWT_AUDIENCE}" \
   bound_subject="${VSO_JWT_BOUND_SUBJECT}" \
   policies=mysecret \
+  token_no_default_policy=true \
+  token_type=batch \
   ttl=1h
 
 echo ""
@@ -245,7 +242,7 @@ echo ""
 # plain-text `vault read` table wraps multi-line PEM values across several
 # output lines with no per-line key prefix, so a naive line-based grep
 # filter (matched only against the first line of each field) would leak
-# the remaining lines of jwks_ca_pem. jq operates on the whole JSON value,
+# the remaining lines of a CA PEM. jq operates on the whole JSON value,
 # so the entire field is removed regardless of how many lines it spans.
 kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault read -format=json "auth/${VSO_JWT_AUTH_MOUNT}/config" \
   | jq 'del(.data.jwks_ca_pem, .data.jwt_validation_pubkeys, .data.oidc_discovery_ca_pem)'
@@ -254,12 +251,15 @@ kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- vault read "auth/${VSO_JWT_AU
 
 echo ""
 echo "auth/${VSO_JWT_AUTH_MOUNT} is configured in context '${VAULT_CONTEXT}':"
-echo "  issuer (bound_issuer, string compare only): ${VSO_OIDC_ISSUER}"
-echo "  jwks_url (fetched directly, VSO cluster):   ${VSO_OIDC_JWKS_URL}"
-echo "  bound_audiences:                            ${VSO_JWT_AUDIENCE}"
-echo "  bound_subject:                               ${VSO_JWT_BOUND_SUBJECT}"
-echo "  policies:                                    mysecret"
+echo "  oidc_discovery_url: ${VSO_OIDC_DISCOVERY_URL}"
+echo "  bound_issuer:       ${VSO_OIDC_ISSUER}"
+echo "  discovered jwks:    ${VSO_OIDC_JWKS_URL}"
+echo "  signing algorithm:  RS256"
+echo "  bound_audiences:    ${VSO_JWT_AUDIENCE}"
+echo "  bound_subject:      ${VSO_JWT_BOUND_SUBJECT}"
+echo "  token policies:     mysecret (default policy suppressed)"
+echo "  token type:         batch (non-renewable; VSO re-authenticates)"
 echo ""
 echo "No token_reviewer_jwt was written -- this mount validates VSO service"
-echo "account JWTs directly against the VSO cluster's JWKS, with no"
-echo "TokenReview call and no reviewer identity stored in Vault."
+echo "account JWTs through TLS-verified OIDC discovery and its advertised JWKS,"
+echo "with no TokenReview call and no reviewer identity stored in Vault."
