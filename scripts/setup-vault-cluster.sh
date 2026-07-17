@@ -115,16 +115,29 @@ spec:
 EOF
 
 echo "Waiting for Vault pod to be ready in ${VAULT_CONTEXT}..."
-while : ; do
-  POD=$(kubectl_vault get pods -n "$NAMESPACE" -l "$VAULT_POD_LABEL_SELECTOR" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+VAULT_POD_READY_ATTEMPTS="${VAULT_POD_READY_ATTEMPTS:-60}"
+VAULT_POD_READY_SLEEP="${VAULT_POD_READY_SLEEP:-5}"
+POD=""
+READY_STATUS=""
+for attempt in $(seq 1 "$VAULT_POD_READY_ATTEMPTS"); do
+  # A fresh Helm install can briefly return no matching pod. These lookups
+  # are retry conditions, not fatal errors under `set -e`.
+  POD=$(kubectl_vault get pods -n "$NAMESPACE" -l "$VAULT_POD_LABEL_SELECTOR" \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
   if [ -n "$POD" ]; then
-    READY_STATUS=$(kubectl_vault get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Initialized")].status}')
+    READY_STATUS=$(kubectl_vault get pod "$POD" -n "$NAMESPACE" \
+      -o jsonpath='{.status.conditions[?(@.type=="Initialized")].status}' 2>/dev/null || true)
     if [ "$READY_STATUS" = "True" ]; then
       break
     fi
   fi
-  sleep 5
-  echo "Still waiting for Vault pod to be ready..."
+  if [ "$attempt" -eq "$VAULT_POD_READY_ATTEMPTS" ]; then
+    echo "ERROR: Vault pod did not become Initialized after ${VAULT_POD_READY_ATTEMPTS} attempts." >&2
+    kubectl_vault get pods -n "$NAMESPACE" -l "$VAULT_POD_LABEL_SELECTOR" -o wide >&2 || true
+    exit 1
+  fi
+  echo "Still waiting for Vault pod to be ready (attempt ${attempt}/${VAULT_POD_READY_ATTEMPTS})..."
+  sleep "$VAULT_POD_READY_SLEEP"
 done
 echo "Vault pod $POD is Initialized."
 
@@ -139,10 +152,10 @@ KEYS_FILE="${KEYS_FILE:-vault-init-keys.json}"
 
 unseal_from_file() {
   # Unseal the Vault pod using keys saved in $KEYS_FILE on the host.
-  if [ ! -f "$KEYS_FILE" ]; then
+  if ! jq -e '.unseal_keys_b64 | type == "array" and length >= 3' "$KEYS_FILE" >/dev/null 2>&1; then
     return 1
   fi
-  local i
+  local i key
   for i in 0 1 2; do
     key=$(jq -r ".unseal_keys_b64[$i]" "$KEYS_FILE")
     if [ -z "$key" ] || [ "$key" = "null" ]; then
@@ -150,19 +163,44 @@ unseal_from_file() {
     fi
     kubectl_vault exec "$POD" -n "$NAMESPACE" -- vault operator unseal "$key" >/dev/null
   done
+  unset key
   return 0
 }
 
-if kubectl_vault exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q 'Initialized.*true' \
-    && kubectl_vault exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q 'Sealed.*false'; then
+login_from_file() {
+  # Restore an authenticated Vault CLI session after a pod/node restart.
+  if ! ROOT_TOKEN=$(jq -er '.root_token // empty' "$KEYS_FILE" 2>/dev/null); then
+    return 1
+  fi
+  kubectl_vault exec "$POD" -n "$NAMESPACE" -- vault login -no-print "$ROOT_TOKEN" >/dev/null
+  unset ROOT_TOKEN
+}
+
+# `vault status` deliberately exits 2 while Vault is sealed. Capture its JSON
+# once with that exit ignored, then inspect the fields; piping the command
+# directly through grep under `set -o pipefail` would misclassify a sealed,
+# initialized Vault as fresh and attempt a destructive second initialization.
+VAULT_STATUS_JSON=$(kubectl_vault exec "$POD" -n "$NAMESPACE" -- \
+  vault status -format=json 2>/dev/null || true)
+if ! printf '%s' "$VAULT_STATUS_JSON" | jq -e \
+    'type == "object" and has("initialized") and has("sealed")' >/dev/null 2>&1; then
+  echo "ERROR: could not determine Vault initialization/seal status." >&2
+  echo "       Check: kubectl --context ${VAULT_CONTEXT} exec ${POD} -n ${NAMESPACE} -- vault status" >&2
+  exit 1
+fi
+VAULT_INITIALIZED=$(printf '%s' "$VAULT_STATUS_JSON" | jq -r '.initialized')
+VAULT_SEALED=$(printf '%s' "$VAULT_STATUS_JSON" | jq -r '.sealed')
+unset VAULT_STATUS_JSON
+
+if [ "$VAULT_INITIALIZED" = "true" ] && [ "$VAULT_SEALED" = "false" ]; then
   echo "Vault is already initialized and unsealed. Skipping init/unseal."
-elif kubectl_vault exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | grep -q 'Initialized.*true'; then
+elif [ "$VAULT_INITIALIZED" = "true" ]; then
   # Initialized but sealed (e.g. the pod restarted). Recover from saved keys.
   echo "Vault is initialized but sealed. Attempting to unseal from ${KEYS_FILE}..."
-  if unseal_from_file; then
-    echo "Vault unsealed from saved keys in ${KEYS_FILE}."
+  if unseal_from_file && login_from_file; then
+    echo "Vault unsealed and CLI login restored from ${KEYS_FILE}."
   else
-    echo "ERROR: Vault is sealed and no usable unseal keys were found in ${KEYS_FILE}." >&2
+    echo "ERROR: Vault is sealed and no usable unseal keys/root token were found in ${KEYS_FILE}." >&2
     echo "Cannot recover this Vault. Recreate the cluster for a clean demo:" >&2
     echo "  kind delete cluster --name ${VAULT_KIND_CLUSTER_NAME} && scripts/create-clusters.sh" >&2
     echo "  helm repo add hashicorp https://helm.releases.hashicorp.com && helm repo update" >&2
@@ -172,23 +210,38 @@ elif kubectl_vault exec "$POD" -n "$NAMESPACE" -- vault status 2>/dev/null | gre
     exit 1
   fi
 else
-  # Fresh Vault: initialize, persist keys to a gitignored host file, then unseal.
+  # Fresh Vault: initialize first, then persist the successful JSON response.
+  # Capturing before redirecting prevents a failed second initialization from
+  # truncating an existing recovery file.
   echo "Initializing Vault and saving unseal keys to ${KEYS_FILE}..."
-  kubectl_vault exec "$POD" -n "$NAMESPACE" -- \
-    vault operator init -key-shares=5 -key-threshold=3 -format=json > "$KEYS_FILE"
+  if ! VAULT_INIT_JSON=$(kubectl_vault exec "$POD" -n "$NAMESPACE" -- \
+      vault operator init -key-shares=5 -key-threshold=3 -format=json); then
+    echo "ERROR: Vault initialization failed; ${KEYS_FILE} was left unchanged." >&2
+    exit 1
+  fi
+  printf '%s\n' "$VAULT_INIT_JSON" > "$KEYS_FILE"
+  unset VAULT_INIT_JSON
   chmod 600 "$KEYS_FILE"
 
-  if ! unseal_from_file; then
-    echo "ERROR: failed to unseal Vault from freshly written ${KEYS_FILE}." >&2
+  if ! unseal_from_file || ! login_from_file; then
+    echo "ERROR: failed to unseal/login using freshly written ${KEYS_FILE}." >&2
     exit 1
   fi
 
-  # Login with the root token without printing it to the terminal.
-  ROOT_TOKEN=$(jq -r '.root_token' "$KEYS_FILE")
-  kubectl_vault exec "$POD" -n "$NAMESPACE" -- vault login -no-print "$ROOT_TOKEN"
-
   echo "Vault initialized, unsealed, logged in and ready for use."
   echo "Unseal keys and root token saved to ${KEYS_FILE} (gitignored). Keep this file safe; it is demo-only."
+fi
+unset VAULT_INITIALIZED VAULT_SEALED
+
+# Being initialized and unsealed does not guarantee the Vault CLI still has
+# an authenticated token after a pod/node restart. Reuse a valid cached login
+# when present; otherwise restore it from the protected local init file.
+if ! kubectl_vault exec "$POD" -n "$NAMESPACE" -- vault token lookup >/dev/null 2>&1; then
+  echo "Vault CLI session is not authenticated. Restoring login from ${KEYS_FILE}..."
+  if ! login_from_file; then
+    echo "ERROR: Vault is unsealed, but CLI authentication could not be restored from ${KEYS_FILE}." >&2
+    exit 1
+  fi
 fi
 
 # Enable audit device only if not already enabled

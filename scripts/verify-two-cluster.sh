@@ -375,6 +375,29 @@ if [ "$SKIP_ROTATION" -eq 1 ]; then
 else
   section "7/7 rotation (Vault cluster write -> VSO cluster Secret update)"
 
+  # If verification is interrupted after mutation (Ctrl-C, terminal loss, or
+  # any later command failure), restore the exact value observed in section 6.
+  # The trap is disarmed as soon as the normal baseline reset succeeds.
+  ORIGINAL_VAULT_VALUE="$VAULT_VALUE"
+  ROTATION_CLEANUP_ARMED=1
+  restore_original_vault_value() {
+    local exit_status=$?
+    trap - EXIT INT TERM
+    if [ "$ROTATION_CLEANUP_ARMED" -eq 1 ]; then
+      echo "==> Cleanup: restoring the pre-verification Vault secret value after interruption/failure..." >&2
+      if kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- \
+          vault kv put kv-v2/vault-demo/mysecret username="${ORIGINAL_VAULT_VALUE}" >/dev/null 2>&1; then
+        echo "OK: pre-verification Vault secret value restored." >&2
+      else
+        echo "ERROR: automatic Vault secret restoration failed; restore kv-v2/vault-demo/mysecret manually." >&2
+      fi
+    fi
+    exit "$exit_status"
+  }
+  trap restore_original_vault_value EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
   echo "==> Writing rotated value (username=${ROTATED_USERNAME}) to kv-v2/vault-demo/mysecret in ${VAULT_CONTEXT}..."
   kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- \
     vault kv put kv-v2/vault-demo/mysecret username="${ROTATED_USERNAME}" >/dev/null
@@ -392,9 +415,14 @@ else
   done
 
   if [ "$ROTATED_SYNCED" != "true" ]; then
-    # Reset the baseline before failing, so a re-run starts clean.
-    kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- \
-      vault kv put kv-v2/vault-demo/mysecret username="${BASELINE_USERNAME}" >/dev/null 2>&1 || true
+    # Reset the baseline before failing, so a re-run starts clean. Keep the
+    # EXIT trap armed if this explicit reset fails, so it retries the exact
+    # pre-verification value during exit handling.
+    if kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- \
+        vault kv put kv-v2/vault-demo/mysecret username="${BASELINE_USERNAME}" >/dev/null 2>&1; then
+      ROTATION_CLEANUP_ARMED=0
+      trap - EXIT INT TERM
+    fi
     fail_section \
       "The VSO cluster's native Secret '${SECRET_NAME}' did not reflect the rotated value ('${ROTATED_USERNAME}') within ${ROTATION_ATTEMPTS} attempts (${ROTATION_SLEEP}s apart)." \
       "Inspect with: kubectl --context ${VSO_CONTEXT} describe vaultstaticsecret ${SECRET_NAME} -n ${VSO_NAMESPACE}; and: kubectl --context ${VSO_CONTEXT} logs -n ${VSO_OPERATOR_NAMESPACE} -l app.kubernetes.io/name=vault-secrets-operator"
@@ -404,6 +432,8 @@ else
   echo "==> Resetting kv-v2/vault-demo/mysecret to baseline (username=${BASELINE_USERNAME}) in ${VAULT_CONTEXT}..."
   kubectl_vault exec "$VAULT_POD" -n "$NAMESPACE" -- \
     vault kv put kv-v2/vault-demo/mysecret username="${BASELINE_USERNAME}" >/dev/null
+  ROTATION_CLEANUP_ARMED=0
+  trap - EXIT INT TERM
 
   RESET_SYNCED="false"
   for i in $(seq 1 "$ROTATION_ATTEMPTS"); do

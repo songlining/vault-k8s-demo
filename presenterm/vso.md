@@ -40,7 +40,7 @@ running across **two separate Podman-backed kind clusters** — Vault in
 9. The operator's Vault identity is least-privilege.
 10. Updating the value in Vault refreshes the Kubernetes Secret automatically.
 
-<!-- speaker_note: Launch with `presenterm -x presenterm/vso.md`. Run `make verify-two-cluster` first to confirm both clusters are green. Press ctrl+e on each live block. -->
+<!-- speaker_note: Launch with `make vso-deck`. The target starts existing Podman/kind control planes and verifies the current lab first. Healthy resources are reused unchanged; setup runs only when verification fails, followed by a second full verification gate before Presenterm opens. Press ctrl+e on each live block. -->
 
 <!-- end_slide -->
 

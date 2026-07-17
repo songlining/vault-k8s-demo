@@ -71,9 +71,21 @@ demo: ## Run the guided live demo flow (single-cluster Agent Injector/OTel demo)
 vso-demo: ## Run the guided Vault Secrets Operator (VSO) demo flow across both clusters
 	@bash vso-demo.sh
 
-vso-deck: ## Run the VSO demo as a presenterm slide deck (requires presenterm; -x enables live code blocks)
+vso-deck: ## Start and reuse a healthy lab; reconcile only when needed, then run the Presenterm VSO deck
 	@command -v presenterm >/dev/null 2>&1 || { echo "presenterm not installed: brew install presenterm"; exit 1; }
-	@presenterm -x presenterm/vso.md
+	@echo "==> [vso-deck 1/3] Starting Podman and existing kind control planes"
+	@KIND_EXPERIMENTAL_PROVIDER=podman bash scripts/prepare-vso-deck-env.sh
+	@set -e; \
+		echo "==> [vso-deck 2/3] Verifying the existing two-cluster environment"; \
+		if $(MAKE) --no-print-directory verify-two-cluster; then \
+			echo "==> Existing resources are healthy; skipping setup and reusing them unchanged."; \
+		else \
+			echo "==> Existing resources are incomplete or unhealthy; running setup once, then re-verifying."; \
+			KIND_EXPERIMENTAL_PROVIDER=podman $(MAKE) --no-print-directory setup; \
+			$(MAKE) --no-print-directory verify-two-cluster; \
+		fi
+	@echo "==> [vso-deck 3/3] All checkpoints passed; launching Presenterm"
+	@exec presenterm -x presenterm/vso.md
 
 ## --- Verify/status/logs: single-cluster Agent Injector/OTel demo (Vault cluster) --
 

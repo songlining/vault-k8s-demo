@@ -203,6 +203,22 @@ else
   fail=$((fail + 1))
 fi
 
+assert_contains \
+  "rotation cleanup captures the exact pre-verification Vault value" \
+  "$CONTENTS" 'ORIGINAL_VAULT_VALUE="$VAULT_VALUE"'
+
+assert_contains \
+  "rotation cleanup installs an EXIT trap" \
+  "$CONTENTS" 'trap restore_original_vault_value EXIT'
+
+assert_contains \
+  "rotation cleanup restores the original value after interruption/failure" \
+  "$CONTENTS" 'username="${ORIGINAL_VAULT_VALUE}"'
+
+assert_contains \
+  "rotation cleanup handles INT and TERM" \
+  "$CONTENTS" "trap 'exit 130' INT"
+
 # 12. Auth section actually performs real vault write .../login attempts
 #     (not just a status check) using auth/${VSO_JWT_AUTH_MOUNT}, not the
 #     old auth/kubernetes-vso mount.

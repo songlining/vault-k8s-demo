@@ -11,9 +11,9 @@
 # Vault-cluster-internal DNS name, since those only resolve inside the Vault
 # cluster's own cluster network.
 #
-# This script is one-shot and stateless: it runs a throwaway curl pod via
-# `kubectl run --rm -i --restart=Never` in the VSO cluster, reads Vault's
-# /v1/sys/health response, and evaluates the HTTP status code against the
+# This script is one-shot and stateless: it creates a throwaway curl pod in
+# the VSO cluster, waits for it to finish, reads its logs, deletes it, and
+# evaluates Vault's /v1/sys/health HTTP status code against the
 # set Vault itself documents as "healthy enough to prove connectivity"
 # (initialized-but-sealed, standby, etc. all count -- this is a network/
 # reachability check, not a Vault-readiness check).
@@ -35,6 +35,8 @@ CHECK_ONLY=0
 CHECK_POD_NAME="${CHECK_POD_NAME:-vault-connectivity-check}"
 CHECK_IMAGE="${CHECK_IMAGE:-curlimages/curl}"
 CHECK_HEALTH_PATH="${CHECK_HEALTH_PATH:-/v1/sys/health}"
+CHECK_ATTEMPTS="${CHECK_ATTEMPTS:-60}"
+CHECK_SLEEP="${CHECK_SLEEP:-2}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -81,20 +83,46 @@ kubectl_vso delete pod "$CHECK_POD_NAME" --ignore-not-found=true --wait=true >/d
 
 HEALTH_URL="${VAULT_ADDR}${CHECK_HEALTH_PATH}"
 
-set +e
-POD_OUTPUT=$(kubectl_vso run "$CHECK_POD_NAME" \
-  --rm -i --restart=Never \
-  --image="$CHECK_IMAGE" \
-  --command -- sh -c \
-  "http_code=\$(curl -s -o /tmp/health.json -w '%{http_code}' --max-time 10 '${HEALTH_URL}' 2>/tmp/health.err); echo \"HTTP_CODE=\${http_code}\"; echo '--- body ---'; cat /tmp/health.json 2>/dev/null; echo ''; echo '--- curl stderr ---'; cat /tmp/health.err 2>/dev/null" \
-  2>&1)
-POD_STATUS=$?
-set -e
+if ! kubectl_vso run "$CHECK_POD_NAME" \
+    --restart=Never \
+    --image="$CHECK_IMAGE" \
+    --command -- sh -c \
+    "http_code=\$(curl -s -o /tmp/health.json -w '%{http_code}' --max-time 10 '${HEALTH_URL}' 2>/tmp/health.err); echo \"HTTP_CODE=\${http_code}\"; echo '--- body ---'; cat /tmp/health.json 2>/dev/null; echo ''; echo '--- curl stderr ---'; cat /tmp/health.err 2>/dev/null" \
+    >/dev/null; then
+  echo "ERROR: failed to create connectivity-check pod '${CHECK_POD_NAME}'." >&2
+  exit 1
+fi
+
+POD_PHASE=""
+for attempt in $(seq 1 "$CHECK_ATTEMPTS"); do
+  POD_PHASE=$(kubectl_vso get pod "$CHECK_POD_NAME" \
+    -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  case "$POD_PHASE" in
+    Succeeded|Failed)
+      break
+      ;;
+  esac
+  if [ "$attempt" -eq "$CHECK_ATTEMPTS" ]; then
+    echo "ERROR: connectivity-check pod did not finish after ${CHECK_ATTEMPTS} attempts." >&2
+    kubectl_vso describe pod "$CHECK_POD_NAME" >&2 || true
+    kubectl_vso delete pod "$CHECK_POD_NAME" --ignore-not-found=true --wait=true >/dev/null 2>&1 || true
+    exit 1
+  fi
+  sleep "$CHECK_SLEEP"
+done
+
+POD_OUTPUT=$(kubectl_vso logs "$CHECK_POD_NAME" 2>&1 || true)
+if [ "$POD_PHASE" = "Succeeded" ]; then
+  POD_STATUS=0
+else
+  POD_STATUS=1
+fi
+kubectl_vso delete pod "$CHECK_POD_NAME" --ignore-not-found=true --wait=true >/dev/null 2>&1 || true
 
 echo "$POD_OUTPUT"
 echo ""
 
-HTTP_CODE=$(printf '%s\n' "$POD_OUTPUT" | grep -m1 '^HTTP_CODE=' | cut -d= -f2)
+HTTP_CODE=$(printf '%s\n' "$POD_OUTPUT" | grep -m1 '^HTTP_CODE=' | cut -d= -f2 || true)
 
 # Vault's /v1/sys/health intentionally returns non-200 codes to signal state
 # (sealed, standby, uninitialized, etc.) without that being a connectivity
