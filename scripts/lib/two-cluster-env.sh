@@ -161,6 +161,338 @@ APP_POD="${APP_POD:-vso-demo-app}"
 VAULT_TOKEN_REVIEWER_SA="${VAULT_TOKEN_REVIEWER_SA:-vault-token-reviewer}"
 
 # --------------------------------------------------------------------------
+# Auth-delegator (client JWT self-review) scenario defaults
+# --------------------------------------------------------------------------
+# Second, parallel VSO scenario: see docs/vso-kubernetes-auth-delegator-plan.md.
+# Vault authenticates the *same* short-lived, dual-audience ServiceAccount JWT
+# VSO uses to log in as the HTTP bearer for its own Kubernetes TokenReview
+# call (disable_local_ca_jwt=true, no token_reviewer_jwt). Every name below
+# is dedicated to this scenario so it can run alongside the default JWT/OIDC
+# scenario (auth/${VSO_JWT_AUTH_MOUNT}, namespace ${VSO_NAMESPACE}) without
+# sharing any mount, namespace, ServiceAccount, or Secret name.
+# validate_auth_delegator_env (below) enforces that these never collide.
+
+# VSO-cluster namespaces. Auth/config resources (VaultConnection/VaultAuth)
+# live in the auth namespace; the app/consumer namespace holds the
+# self-review ServiceAccount, the app ServiceAccount, the VaultStaticSecret,
+# the destination Secret, and the plain app pod -- proving VSO resolves the
+# Kubernetes ServiceAccount from the *consuming* resource's namespace even
+# though the VaultAuth itself is centrally defined elsewhere.
+AUTH_DELEGATOR_AUTH_NAMESPACE="${AUTH_DELEGATOR_AUTH_NAMESPACE:-vso-auth-delegator}"
+AUTH_DELEGATOR_APP_NAMESPACE="${AUTH_DELEGATOR_APP_NAMESPACE:-vso-auth-delegator-app}"
+
+# ServiceAccounts, both created only in AUTH_DELEGATOR_APP_NAMESPACE. The
+# self-review SA is the ONLY subject ever added to
+# AUTH_DELEGATOR_CLUSTER_ROLE_BINDING; the app SA is unprivileged and never
+# receives system:auth-delegator or any Vault-facing role.
+AUTH_DELEGATOR_SELF_REVIEW_SA="${AUTH_DELEGATOR_SELF_REVIEW_SA:-vso-auth-delegator}"
+AUTH_DELEGATOR_APP_SA="${AUTH_DELEGATOR_APP_SA:-vso-auth-delegator-app}"
+
+# The single scenario-owned ClusterRoleBinding. Its only subject must be
+# AUTH_DELEGATOR_SELF_REVIEW_SA in AUTH_DELEGATOR_APP_NAMESPACE.
+AUTH_DELEGATOR_CLUSTER_ROLE_BINDING="${AUTH_DELEGATOR_CLUSTER_ROLE_BINDING:-vso-auth-delegator-self-review}"
+
+# The VSO operator needs to create serviceaccounts/token (TokenRequest) for
+# the self-review SA in the app namespace to mint the short-lived, dual-
+# audience JWT. This Role/RoleBinding grants ONLY that permission and is
+# scoped to the self-review SA's resource name. The VSO operator SA name is
+# detected at runtime; the apply script creates this RoleBinding dynamically.
+AUTH_DELEGATOR_TOKEN_CREATOR_ROLE="${AUTH_DELEGATOR_TOKEN_CREATOR_ROLE:-vso-auth-delegator-token-creator}"
+AUTH_DELEGATOR_TOKEN_CREATOR_ROLE_BINDING="${AUTH_DELEGATOR_TOKEN_CREATOR_ROLE_BINDING:-vso-auth-delegator-token-creator}"
+
+# Dedicated Vault Kubernetes auth mount for client JWT self-review. Distinct
+# from both auth/${VSO_JWT_AUTH_MOUNT} (default JWT/OIDC) and
+# auth/${VSO_AUTH_MOUNT} (historical dedicated-reviewer Kubernetes auth) --
+# this script family must never write to either of those.
+AUTH_DELEGATOR_AUTH_MOUNT="${AUTH_DELEGATOR_AUTH_MOUNT:-kubernetes-vso-self-review}"
+AUTH_DELEGATOR_ROLE="${AUTH_DELEGATOR_ROLE:-vso-auth-delegator}"
+AUTH_DELEGATOR_POLICY="${AUTH_DELEGATOR_POLICY:-vso-auth-delegator}"
+
+# Dedicated KV v2 fixture, on the same kv-v2 mount already used by the
+# other scenarios but at its own path.
+AUTH_DELEGATOR_KV_MOUNT="${AUTH_DELEGATOR_KV_MOUNT:-kv-v2}"
+AUTH_DELEGATOR_KV_PATH="${AUTH_DELEGATOR_KV_PATH:-vso-auth-delegator/mysecret}"
+
+# VSO custom resource names. VaultConnection/VaultAuth live in the auth
+# namespace; VaultStaticSecret/destination Secret/app pod live in the app
+# namespace and reference the VaultAuth cross-namespace as
+# "${AUTH_DELEGATOR_AUTH_NAMESPACE}/${AUTH_DELEGATOR_VAULT_AUTH}".
+AUTH_DELEGATOR_VAULT_CONNECTION="${AUTH_DELEGATOR_VAULT_CONNECTION:-vso-auth-delegator}"
+AUTH_DELEGATOR_VAULT_AUTH="${AUTH_DELEGATOR_VAULT_AUTH:-vso-auth-delegator}"
+AUTH_DELEGATOR_VSS_NAME="${AUTH_DELEGATOR_VSS_NAME:-vso-auth-delegator-mysecret}"
+AUTH_DELEGATOR_SECRET_NAME="${AUTH_DELEGATOR_SECRET_NAME:-vso-auth-delegator-mysecret}"
+AUTH_DELEGATOR_APP_POD="${AUTH_DELEGATOR_APP_POD:-vso-auth-delegator-app}"
+
+# Dual audiences. AUTH_DELEGATOR_VAULT_AUDIENCE is the audience the Vault
+# role requests (spec.audiences=["vault"] in the client's TokenReview);
+# AUTH_DELEGATOR_API_AUDIENCE lets the SAME token authenticate as the outer
+# HTTP bearer to the VSO kube-apiserver, which defaults its accepted API
+# audience to its --service-account-issuer (VSO_OIDC_ISSUER) since
+# --api-audiences is not set. See "Audience decision" in the plan --
+# changing this must never require deleting/recreating kind-vso-lab.
+AUTH_DELEGATOR_VAULT_AUDIENCE="${AUTH_DELEGATOR_VAULT_AUDIENCE:-vault}"
+AUTH_DELEGATOR_API_AUDIENCE="${AUTH_DELEGATOR_API_AUDIENCE:-${VSO_OIDC_ISSUER}}"
+
+# Minimum enforced by validate_auth_delegator_env: VSO's Kubernetes
+# credential provider requires tokenExpirationSeconds >= 600.
+AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS="${AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS:-600}"
+AUTH_DELEGATOR_TOKEN_TTL="${AUTH_DELEGATOR_TOKEN_TTL:-1h}"
+
+# Ownership markers stamped on every scenario-owned Kubernetes object
+# (namespaces, ServiceAccounts, ClusterRoleBinding). A same-name object
+# lacking this exact label must never be adopted/mutated.
+AUTH_DELEGATOR_OWNER_LABEL_KEY="${AUTH_DELEGATOR_OWNER_LABEL_KEY:-vault-k8s-demo.hashicorp.com/scenario}"
+AUTH_DELEGATOR_OWNER_LABEL_VALUE="${AUTH_DELEGATOR_OWNER_LABEL_VALUE:-auth-delegator}"
+AUTH_DELEGATOR_OWNER_ANNOTATION_KEY="${AUTH_DELEGATOR_OWNER_ANNOTATION_KEY:-vault-k8s-demo.hashicorp.com/managed-by}"
+AUTH_DELEGATOR_OWNER_ANNOTATION_VALUE="${AUTH_DELEGATOR_OWNER_ANNOTATION_VALUE:-scripts/apply-vso-auth-delegator-demo.sh}"
+
+# Expected description on the dedicated Vault Kubernetes auth mount. A
+# same-name mount is only reusable when its type is "kubernetes" AND its
+# description exactly equals this string; otherwise setup must refuse to
+# overwrite it.
+AUTH_DELEGATOR_MOUNT_DESCRIPTION="${AUTH_DELEGATOR_MOUNT_DESCRIPTION:-Kubernetes auth (client JWT self-review) for the vso-auth-delegator scenario, validated against the VSO cluster API server}"
+
+# Custom KV-v2 metadata key/value marking the dedicated KV fixture as
+# scenario-owned. An existing path is only reusable/mutable when its
+# current custom_metadata carries this exact key/value.
+AUTH_DELEGATOR_KV_METADATA_KEY="${AUTH_DELEGATOR_KV_METADATA_KEY:-vault-k8s-demo-scenario}"
+AUTH_DELEGATOR_KV_METADATA_VALUE="${AUTH_DELEGATOR_KV_METADATA_VALUE:-auth-delegator}"
+
+# auth_delegator_policy_hcl
+#
+# Prints the single canonical Vault policy this scenario ever writes: read
+# on the dedicated KV v2 data path only.
+# scripts/configure-vso-auth-delegator.sh is the sole owner of policy
+# creation; it accepts a pre-existing same-name policy only when its rules
+# are byte-identical to this canonical content.
+auth_delegator_policy_hcl() {
+  cat <<EOF
+path "${AUTH_DELEGATOR_KV_MOUNT}/data/${AUTH_DELEGATOR_KV_PATH}" {
+  capabilities = ["read"]
+}
+EOF
+}
+
+# validate_auth_delegator_env
+#
+# Fails fast on configuration mistakes that would otherwise surface as
+# confusing runtime errors deep inside configure/apply/verify:
+#   - the auth and consumer namespaces must differ
+#   - the ServiceAccount token expiration must be >= 600s (VSO's minimum)
+#   - the Vault and API audiences must both be non-empty and distinct
+#   - the API audience must equal the externally configured VSO issuer
+#     (VSO_OIDC_ISSUER), since the VSO API server's accepted audience
+#     defaults to its --service-account-issuer
+#   - none of this scenario's dedicated names collide with the existing
+#     JWT/OIDC scenario's namespace/mount/Secret/pod names
+#   - the external VSO API address is itself self-consistent
+#     (delegates to validate_vso_oidc_env)
+validate_auth_delegator_env() {
+  local ok=0
+
+  if [ "$AUTH_DELEGATOR_AUTH_NAMESPACE" = "$AUTH_DELEGATOR_APP_NAMESPACE" ]; then
+    echo "ERROR: AUTH_DELEGATOR_AUTH_NAMESPACE and AUTH_DELEGATOR_APP_NAMESPACE must differ (both are '${AUTH_DELEGATOR_AUTH_NAMESPACE}')." >&2
+    ok=1
+  fi
+
+  case "$AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS" in
+    ''|*[!0-9]*)
+      echo "ERROR: AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS must be a positive integer (got '${AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS}')." >&2
+      ok=1
+      ;;
+    *)
+      if [ "$AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS" -lt 600 ]; then
+        echo "ERROR: AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS must be >= 600 (VSO's Kubernetes credential provider minimum); got '${AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS}'." >&2
+        ok=1
+      fi
+      ;;
+  esac
+
+  if [ -z "$AUTH_DELEGATOR_VAULT_AUDIENCE" ] || [ -z "$AUTH_DELEGATOR_API_AUDIENCE" ]; then
+    echo "ERROR: AUTH_DELEGATOR_VAULT_AUDIENCE and AUTH_DELEGATOR_API_AUDIENCE must both be non-empty." >&2
+    ok=1
+  elif [ "$AUTH_DELEGATOR_VAULT_AUDIENCE" = "$AUTH_DELEGATOR_API_AUDIENCE" ]; then
+    echo "ERROR: AUTH_DELEGATOR_VAULT_AUDIENCE and AUTH_DELEGATOR_API_AUDIENCE must be distinct (both are '${AUTH_DELEGATOR_VAULT_AUDIENCE}')." >&2
+    ok=1
+  fi
+
+  if [ "$AUTH_DELEGATOR_API_AUDIENCE" != "$VSO_OIDC_ISSUER" ]; then
+    echo "ERROR: AUTH_DELEGATOR_API_AUDIENCE must equal VSO_OIDC_ISSUER so the dual-audience token can authenticate as the outer HTTP bearer to the VSO API server." >&2
+    echo "       expected='${VSO_OIDC_ISSUER}' actual='${AUTH_DELEGATOR_API_AUDIENCE}'" >&2
+    ok=1
+  fi
+
+  local collisions=()
+  [ "$AUTH_DELEGATOR_AUTH_NAMESPACE" = "$VSO_NAMESPACE" ] && collisions+=("AUTH_DELEGATOR_AUTH_NAMESPACE must not equal VSO_NAMESPACE ('${VSO_NAMESPACE}')")
+  [ "$AUTH_DELEGATOR_APP_NAMESPACE" = "$VSO_NAMESPACE" ] && collisions+=("AUTH_DELEGATOR_APP_NAMESPACE must not equal VSO_NAMESPACE ('${VSO_NAMESPACE}')")
+  [ "$AUTH_DELEGATOR_APP_NAMESPACE" = "$VSO_OPERATOR_NAMESPACE" ] && collisions+=("AUTH_DELEGATOR_APP_NAMESPACE must not equal VSO_OPERATOR_NAMESPACE ('${VSO_OPERATOR_NAMESPACE}')")
+  [ "$AUTH_DELEGATOR_AUTH_NAMESPACE" = "$VSO_OPERATOR_NAMESPACE" ] && collisions+=("AUTH_DELEGATOR_AUTH_NAMESPACE must not equal VSO_OPERATOR_NAMESPACE ('${VSO_OPERATOR_NAMESPACE}')")
+  [ "$AUTH_DELEGATOR_AUTH_MOUNT" = "$VSO_JWT_AUTH_MOUNT" ] && collisions+=("AUTH_DELEGATOR_AUTH_MOUNT must not equal VSO_JWT_AUTH_MOUNT ('${VSO_JWT_AUTH_MOUNT}')")
+  [ "$AUTH_DELEGATOR_AUTH_MOUNT" = "$VSO_AUTH_MOUNT" ] && collisions+=("AUTH_DELEGATOR_AUTH_MOUNT must not equal VSO_AUTH_MOUNT ('${VSO_AUTH_MOUNT}')")
+  [ "$AUTH_DELEGATOR_SECRET_NAME" = "$SECRET_NAME" ] && collisions+=("AUTH_DELEGATOR_SECRET_NAME must not equal SECRET_NAME ('${SECRET_NAME}')")
+  [ "$AUTH_DELEGATOR_APP_POD" = "$APP_POD" ] && collisions+=("AUTH_DELEGATOR_APP_POD must not equal APP_POD ('${APP_POD}')")
+  [ "$AUTH_DELEGATOR_POLICY" = "mysecret" ] && collisions+=("AUTH_DELEGATOR_POLICY must not reuse the shared 'mysecret' policy name")
+  [ "$AUTH_DELEGATOR_KV_PATH" = "vault-demo/mysecret" ] && collisions+=("AUTH_DELEGATOR_KV_PATH must not reuse the shared 'vault-demo/mysecret' path")
+
+  if [ "${#collisions[@]}" -gt 0 ]; then
+    echo "ERROR: auth-delegator names collide with the existing JWT/OIDC scenario:" >&2
+    local c
+    for c in "${collisions[@]}"; do
+      echo "       - ${c}" >&2
+    done
+    ok=1
+  fi
+
+  validate_vso_oidc_env || ok=1
+
+  return "$ok"
+}
+
+# preflight_auth_delegator_runtime
+#
+# Feature-detects (rather than assumes) the runtime capabilities this
+# scenario depends on, printing actionable diagnostics for each gate. Safe
+# to call before any cluster exists (each check degrades to a clear
+# NOTE/ERROR rather than crashing). Returns non-zero only when a gate this
+# function can verify with confidence has actually failed. Never creates,
+# deletes, or recreates a cluster or container.
+#
+#   - both kind control-plane containers already exist
+#   - the deployed VSO version/image (informational; VSO_CHART_VERSION
+#     defaults to 1.4.0, the first release with cross-namespace
+#     vaultAuthRef + Kubernetes audiences/tokenExpirationSeconds support)
+#   - the VaultAuth CRD schema actually exposes allowedNamespaces and the
+#     Kubernetes audiences/tokenExpirationSeconds fields
+#   - the VSO operator's ServiceAccount can create serviceaccounts/token in
+#     the consumer namespace (TokenRequest RBAC)
+preflight_auth_delegator_runtime() {
+  local ok=0
+
+  if command -v podman >/dev/null 2>&1; then
+    local c
+    for c in "${VAULT_KIND_CLUSTER_NAME}-control-plane" "${VSO_KIND_CLUSTER_NAME}-control-plane"; do
+      if ! podman container exists "$c" 2>/dev/null; then
+        echo "ERROR: kind control-plane container '${c}' does not exist." >&2
+        echo "       This scenario never creates clusters; create it out-of-band first." >&2
+        ok=1
+      fi
+    done
+  else
+    echo "WARNING: podman not found on PATH; cannot confirm both kind control-plane containers already exist." >&2
+  fi
+
+  if ! command -v kubectl >/dev/null 2>&1; then
+    echo "ERROR: kubectl not found on PATH; cannot feature-detect VSO version/CRD/RBAC support." >&2
+    return 1
+  fi
+
+  if ! context_exists "$VSO_CONTEXT"; then
+    echo "NOTE: context '${VSO_CONTEXT}' does not exist yet; skipping live VSO version/CRD/RBAC feature detection." >&2
+    return "$ok"
+  fi
+
+  local vso_image
+  vso_image=$(kubectl_vso get deploy -n "$VSO_OPERATOR_NAMESPACE" \
+    -l app.kubernetes.io/name=vault-secrets-operator \
+    -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' 2>/dev/null || true)
+  if [ -z "$vso_image" ]; then
+    echo "NOTE: no Vault Secrets Operator deployment found in context '${VSO_CONTEXT}' namespace '${VSO_OPERATOR_NAMESPACE}' yet." >&2
+  else
+    echo "NOTE: deployed Vault Secrets Operator image: ${vso_image}" >&2
+  fi
+
+  if command -v jq >/dev/null 2>&1 && kubectl_vso get crd vaultauths.secrets.hashicorp.com >/dev/null 2>&1; then
+    local crd_schema has_allowed_ns has_audiences has_token_exp
+    crd_schema=$(kubectl_vso get crd vaultauths.secrets.hashicorp.com -o json 2>/dev/null || true)
+    has_allowed_ns=$(printf '%s' "$crd_schema" | jq -e '
+      [.spec.versions[].schema.openAPIV3Schema.properties.spec.properties.allowedNamespaces]
+      | any(. != null)' >/dev/null 2>&1 && echo true || echo false)
+    has_audiences=$(printf '%s' "$crd_schema" | jq -e '
+      [.spec.versions[].schema.openAPIV3Schema.properties.spec.properties.kubernetes.properties.audiences]
+      | any(. != null)' >/dev/null 2>&1 && echo true || echo false)
+    has_token_exp=$(printf '%s' "$crd_schema" | jq -e '
+      [.spec.versions[].schema.openAPIV3Schema.properties.spec.properties.kubernetes.properties.tokenExpirationSeconds]
+      | any(. != null)' >/dev/null 2>&1 && echo true || echo false)
+    if [ "$has_allowed_ns" != "true" ] || [ "$has_audiences" != "true" ] || [ "$has_token_exp" != "true" ]; then
+      echo "ERROR: the installed VaultAuth CRD does not expose allowedNamespaces/kubernetes.audiences/kubernetes.tokenExpirationSeconds." >&2
+      echo "       Upgrade the vault-secrets-operator Helm release to >= 1.4.0 (see VSO_CHART_VERSION)." >&2
+      ok=1
+    else
+      echo "OK: VaultAuth CRD exposes allowedNamespaces, kubernetes.audiences, and kubernetes.tokenExpirationSeconds." >&2
+    fi
+  else
+    echo "NOTE: VaultAuth CRD not found (or jq unavailable) in context '${VSO_CONTEXT}'; skipping CRD schema feature detection." >&2
+  fi
+
+  local operator_sa
+  operator_sa=$(kubectl_vso get deploy -n "$VSO_OPERATOR_NAMESPACE" \
+    -l app.kubernetes.io/name=vault-secrets-operator \
+    -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}' 2>/dev/null || true)
+  if [ -n "$operator_sa" ]; then
+    # 'kubectl auth can-i create serviceaccounts/token' with --as is
+    # unreliable for the TokenRequest subresource (known Kubernetes RBAC
+    # quirk: the authorization check for serviceaccounts/token is handled
+    # by the TokenRequest API itself, not the normal SAR path). Instead,
+    # verify the Role/RoleBinding exists with the VSO operator SA as its
+    # subject. If the namespace doesn't exist yet (first apply hasn't
+    # run), skip with a NOTE.
+    if ! kubectl_vso get namespace "$AUTH_DELEGATOR_APP_NAMESPACE" >/dev/null 2>&1; then
+      echo "NOTE: namespace '${AUTH_DELEGATOR_APP_NAMESPACE}' does not exist yet; skipping TokenRequest RBAC check (apply will create the Role/RoleBinding)." >&2
+    elif kubectl_vso get rolebinding "$AUTH_DELEGATOR_TOKEN_CREATOR_ROLE_BINDING" -n "$AUTH_DELEGATOR_APP_NAMESPACE" >/dev/null 2>&1 \
+        && [ "$(kubectl_vso get rolebinding "$AUTH_DELEGATOR_TOKEN_CREATOR_ROLE_BINDING" -n "$AUTH_DELEGATOR_APP_NAMESPACE" \
+          -o jsonpath='{.subjects[?(@.kind=="ServiceAccount")].name}' 2>/dev/null)" = "$operator_sa" ]; then
+      echo "OK: RoleBinding '${AUTH_DELEGATOR_TOKEN_CREATOR_ROLE_BINDING}' grants VSO operator SA '${operator_sa}' permission to create tokens for '${AUTH_DELEGATOR_SELF_REVIEW_SA}' in '${AUTH_DELEGATOR_APP_NAMESPACE}'." >&2
+    else
+      echo "ERROR: RoleBinding '${AUTH_DELEGATOR_TOKEN_CREATOR_ROLE_BINDING}' not found (or does not reference VSO operator SA '${operator_sa}') in '${AUTH_DELEGATOR_APP_NAMESPACE}'." >&2
+      echo "       VSO cannot mint the short-lived self-review JWT without this RBAC." >&2
+      echo "       Run scripts/apply-vso-auth-delegator-demo.sh first (it creates the Role/RoleBinding)." >&2
+      ok=1
+    fi
+  else
+    echo "NOTE: could not resolve the VSO operator ServiceAccount name; skipping TokenRequest RBAC feature detection." >&2
+  fi
+
+  return "$ok"
+}
+
+# capture_jwt_oidc_baseline_snapshot <vault_pod>
+#
+# Prints a normalized (sorted-key, secret-stripped) JSON snapshot of the
+# EXISTING default JWT/OIDC scenario's auth/${VSO_JWT_AUTH_MOUNT} mount
+# config + role, so configure/apply/verify scripts for the new
+# client-JWT-self-review scenario can prove they never disturbed it.
+# Requires kubectl_vault, NAMESPACE, VSO_JWT_AUTH_MOUNT, and
+# VSO_JWT_AUTH_ROLE to already be set (i.e. this file already sourced).
+capture_jwt_oidc_baseline_snapshot() {
+  local vault_pod="$1"
+  local mount_cfg role_cfg
+  mount_cfg=$(kubectl_vault exec "$vault_pod" -n "$NAMESPACE" -- vault read -format=json \
+    "auth/${VSO_JWT_AUTH_MOUNT}/config" 2>/dev/null || echo '{}')
+  role_cfg=$(kubectl_vault exec "$vault_pod" -n "$NAMESPACE" -- vault read -format=json \
+    "auth/${VSO_JWT_AUTH_MOUNT}/role/${VSO_JWT_AUTH_ROLE}" 2>/dev/null || echo '{}')
+  jq -n --argjson mount "$mount_cfg" --argjson role "$role_cfg" '
+    {
+      mount: (($mount.data // {}) | del(.oidc_discovery_ca_pem, .jwks_ca_pem, .jwt_validation_pubkeys)),
+      role: ($role.data // {})
+    }' | jq -S .
+}
+
+# capture_vso_demo_cr_snapshot
+#
+# Prints a normalized JSON snapshot of the EXISTING default scenario's
+# VaultConnection/VaultAuth/VaultStaticSecret specs in $VSO_NAMESPACE, so
+# the new scenario's verifier can prove it never disturbed them. Requires
+# kubectl_vso, VSO_NAMESPACE, and SECRET_NAME to already be set.
+capture_vso_demo_cr_snapshot() {
+  local conn auth vss
+  conn=$(kubectl_vso get vaultconnection vso-demo-connection -n "$VSO_NAMESPACE" -o json 2>/dev/null | jq -c '.spec // {}' 2>/dev/null || echo '{}')
+  auth=$(kubectl_vso get vaultauth vso-demo-auth -n "$VSO_NAMESPACE" -o json 2>/dev/null | jq -c '.spec // {}' 2>/dev/null || echo '{}')
+  vss=$(kubectl_vso get vaultstaticsecret "$SECRET_NAME" -n "$VSO_NAMESPACE" -o json 2>/dev/null | jq -c '.spec // {}' 2>/dev/null || echo '{}')
+  jq -n --argjson conn "$conn" --argjson auth "$auth" --argjson vss "$vss" \
+    '{vaultConnection: $conn, vaultAuth: $auth, vaultStaticSecret: $vss}' | jq -S .
+}
+
+# --------------------------------------------------------------------------
 # Command preflight
 # --------------------------------------------------------------------------
 
@@ -359,5 +691,26 @@ VSO_OIDC_ISSUER=$VSO_OIDC_ISSUER
 VSO_OIDC_JWKS_URL=$VSO_OIDC_JWKS_URL
 SECRET_NAME=$SECRET_NAME
 APP_POD=$APP_POD
+AUTH_DELEGATOR_AUTH_NAMESPACE=$AUTH_DELEGATOR_AUTH_NAMESPACE
+AUTH_DELEGATOR_APP_NAMESPACE=$AUTH_DELEGATOR_APP_NAMESPACE
+AUTH_DELEGATOR_SELF_REVIEW_SA=$AUTH_DELEGATOR_SELF_REVIEW_SA
+AUTH_DELEGATOR_APP_SA=$AUTH_DELEGATOR_APP_SA
+AUTH_DELEGATOR_CLUSTER_ROLE_BINDING=$AUTH_DELEGATOR_CLUSTER_ROLE_BINDING
+AUTH_DELEGATOR_TOKEN_CREATOR_ROLE=$AUTH_DELEGATOR_TOKEN_CREATOR_ROLE
+AUTH_DELEGATOR_TOKEN_CREATOR_ROLE_BINDING=$AUTH_DELEGATOR_TOKEN_CREATOR_ROLE_BINDING
+AUTH_DELEGATOR_AUTH_MOUNT=$AUTH_DELEGATOR_AUTH_MOUNT
+AUTH_DELEGATOR_ROLE=$AUTH_DELEGATOR_ROLE
+AUTH_DELEGATOR_POLICY=$AUTH_DELEGATOR_POLICY
+AUTH_DELEGATOR_KV_MOUNT=$AUTH_DELEGATOR_KV_MOUNT
+AUTH_DELEGATOR_KV_PATH=$AUTH_DELEGATOR_KV_PATH
+AUTH_DELEGATOR_VAULT_CONNECTION=$AUTH_DELEGATOR_VAULT_CONNECTION
+AUTH_DELEGATOR_VAULT_AUTH=$AUTH_DELEGATOR_VAULT_AUTH
+AUTH_DELEGATOR_VSS_NAME=$AUTH_DELEGATOR_VSS_NAME
+AUTH_DELEGATOR_SECRET_NAME=$AUTH_DELEGATOR_SECRET_NAME
+AUTH_DELEGATOR_APP_POD=$AUTH_DELEGATOR_APP_POD
+AUTH_DELEGATOR_VAULT_AUDIENCE=$AUTH_DELEGATOR_VAULT_AUDIENCE
+AUTH_DELEGATOR_API_AUDIENCE=$AUTH_DELEGATOR_API_AUDIENCE
+AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS=$AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS
+AUTH_DELEGATOR_TOKEN_TTL=$AUTH_DELEGATOR_TOKEN_TTL
 EOF
 }

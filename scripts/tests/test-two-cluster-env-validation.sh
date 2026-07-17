@@ -202,6 +202,171 @@ else
   check "inconsistent derived VSO API/OIDC values are rejected" 0
 fi
 
+# --------------------------------------------------------------------------
+# 6. Auth-delegator (client JWT self-review) scenario defaults, added for
+#    docs/vso-kubernetes-auth-delegator-plan.md.
+# --------------------------------------------------------------------------
+
+AUTH_DELEGATOR_DEFAULTS_OUTPUT="$(
+  env -u AUTH_DELEGATOR_AUTH_NAMESPACE -u AUTH_DELEGATOR_APP_NAMESPACE \
+      -u AUTH_DELEGATOR_SELF_REVIEW_SA -u AUTH_DELEGATOR_APP_SA \
+      -u AUTH_DELEGATOR_CLUSTER_ROLE_BINDING -u AUTH_DELEGATOR_AUTH_MOUNT \
+      -u AUTH_DELEGATOR_ROLE -u AUTH_DELEGATOR_POLICY -u AUTH_DELEGATOR_KV_MOUNT \
+      -u AUTH_DELEGATOR_KV_PATH -u AUTH_DELEGATOR_VAULT_CONNECTION \
+      -u AUTH_DELEGATOR_VAULT_AUTH -u AUTH_DELEGATOR_VSS_NAME \
+      -u AUTH_DELEGATOR_SECRET_NAME -u AUTH_DELEGATOR_APP_POD \
+      -u AUTH_DELEGATOR_VAULT_AUDIENCE -u AUTH_DELEGATOR_API_AUDIENCE \
+      -u AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS -u AUTH_DELEGATOR_TOKEN_TTL \
+    bash -c "set -euo pipefail; source '$ENV_LIB'; print_two_cluster_env"
+)"
+
+get_ad_default() {
+  printf '%s\n' "$AUTH_DELEGATOR_DEFAULTS_OUTPUT" | sed -n "s/^$1=//p"
+}
+
+assert_var_eq "default AUTH_DELEGATOR_AUTH_NAMESPACE is 'vso-auth-delegator'" \
+  "$(get_ad_default AUTH_DELEGATOR_AUTH_NAMESPACE)" "vso-auth-delegator"
+assert_var_eq "default AUTH_DELEGATOR_APP_NAMESPACE is 'vso-auth-delegator-app'" \
+  "$(get_ad_default AUTH_DELEGATOR_APP_NAMESPACE)" "vso-auth-delegator-app"
+assert_var_eq "default AUTH_DELEGATOR_SELF_REVIEW_SA is 'vso-auth-delegator'" \
+  "$(get_ad_default AUTH_DELEGATOR_SELF_REVIEW_SA)" "vso-auth-delegator"
+assert_var_eq "default AUTH_DELEGATOR_APP_SA is 'vso-auth-delegator-app'" \
+  "$(get_ad_default AUTH_DELEGATOR_APP_SA)" "vso-auth-delegator-app"
+assert_var_eq "default AUTH_DELEGATOR_CLUSTER_ROLE_BINDING is 'vso-auth-delegator-self-review'" \
+  "$(get_ad_default AUTH_DELEGATOR_CLUSTER_ROLE_BINDING)" "vso-auth-delegator-self-review"
+assert_var_eq "default AUTH_DELEGATOR_AUTH_MOUNT is 'kubernetes-vso-self-review'" \
+  "$(get_ad_default AUTH_DELEGATOR_AUTH_MOUNT)" "kubernetes-vso-self-review"
+assert_var_eq "default AUTH_DELEGATOR_ROLE is 'vso-auth-delegator'" \
+  "$(get_ad_default AUTH_DELEGATOR_ROLE)" "vso-auth-delegator"
+assert_var_eq "default AUTH_DELEGATOR_POLICY is 'vso-auth-delegator'" \
+  "$(get_ad_default AUTH_DELEGATOR_POLICY)" "vso-auth-delegator"
+assert_var_eq "default AUTH_DELEGATOR_KV_MOUNT is 'kv-v2'" \
+  "$(get_ad_default AUTH_DELEGATOR_KV_MOUNT)" "kv-v2"
+assert_var_eq "default AUTH_DELEGATOR_KV_PATH is 'vso-auth-delegator/mysecret'" \
+  "$(get_ad_default AUTH_DELEGATOR_KV_PATH)" "vso-auth-delegator/mysecret"
+assert_var_eq "default AUTH_DELEGATOR_VSS_NAME is 'vso-auth-delegator-mysecret'" \
+  "$(get_ad_default AUTH_DELEGATOR_VSS_NAME)" "vso-auth-delegator-mysecret"
+assert_var_eq "default AUTH_DELEGATOR_SECRET_NAME is 'vso-auth-delegator-mysecret'" \
+  "$(get_ad_default AUTH_DELEGATOR_SECRET_NAME)" "vso-auth-delegator-mysecret"
+assert_var_eq "default AUTH_DELEGATOR_APP_POD is 'vso-auth-delegator-app'" \
+  "$(get_ad_default AUTH_DELEGATOR_APP_POD)" "vso-auth-delegator-app"
+assert_var_eq "default AUTH_DELEGATOR_VAULT_AUDIENCE is 'vault'" \
+  "$(get_ad_default AUTH_DELEGATOR_VAULT_AUDIENCE)" "vault"
+assert_var_eq "default AUTH_DELEGATOR_API_AUDIENCE derives from VSO_OIDC_ISSUER" \
+  "$(get_ad_default AUTH_DELEGATOR_API_AUDIENCE)" "https://host.containers.internal:6444"
+assert_var_eq "default AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS is '600'" \
+  "$(get_ad_default AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS)" "600"
+assert_var_eq "default AUTH_DELEGATOR_TOKEN_TTL is '1h'" \
+  "$(get_ad_default AUTH_DELEGATOR_TOKEN_TTL)" "1h"
+
+for key in AUTH_DELEGATOR_AUTH_NAMESPACE AUTH_DELEGATOR_APP_NAMESPACE AUTH_DELEGATOR_SELF_REVIEW_SA \
+    AUTH_DELEGATOR_APP_SA AUTH_DELEGATOR_CLUSTER_ROLE_BINDING AUTH_DELEGATOR_AUTH_MOUNT \
+    AUTH_DELEGATOR_ROLE AUTH_DELEGATOR_POLICY AUTH_DELEGATOR_KV_MOUNT AUTH_DELEGATOR_KV_PATH \
+    AUTH_DELEGATOR_VAULT_CONNECTION AUTH_DELEGATOR_VAULT_AUTH AUTH_DELEGATOR_VSS_NAME \
+    AUTH_DELEGATOR_SECRET_NAME AUTH_DELEGATOR_APP_POD AUTH_DELEGATOR_VAULT_AUDIENCE \
+    AUTH_DELEGATOR_API_AUDIENCE AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS AUTH_DELEGATOR_TOKEN_TTL; do
+  if printf '%s\n' "$AUTH_DELEGATOR_DEFAULTS_OUTPUT" | grep -q "^${key}="; then
+    check "print_two_cluster_env() includes $key" 0
+  else
+    check "print_two_cluster_env() includes $key" 1
+  fi
+done
+
+# Overrides are preserved.
+AUTH_DELEGATOR_OVERRIDE_OUTPUT="$(
+  env AUTH_DELEGATOR_AUTH_NAMESPACE=auth-ns-override AUTH_DELEGATOR_APP_NAMESPACE=app-ns-override \
+    bash -c "source '$ENV_LIB'; print_two_cluster_env"
+)"
+if printf '%s\n' "$AUTH_DELEGATOR_OVERRIDE_OUTPUT" | grep -q '^AUTH_DELEGATOR_AUTH_NAMESPACE=auth-ns-override$' \
+    && printf '%s\n' "$AUTH_DELEGATOR_OVERRIDE_OUTPUT" | grep -q '^AUTH_DELEGATOR_APP_NAMESPACE=app-ns-override$'; then
+  check "AUTH_DELEGATOR_AUTH_NAMESPACE/APP_NAMESPACE overrides are preserved" 0
+else
+  check "AUTH_DELEGATOR_AUTH_NAMESPACE/APP_NAMESPACE overrides are preserved" 1
+fi
+
+# validate_auth_delegator_env: happy path (defaults) passes.
+if bash -c "source '$ENV_LIB'; validate_auth_delegator_env" >/dev/null 2>&1; then
+  check "validate_auth_delegator_env passes with unmodified defaults" 0
+else
+  check "validate_auth_delegator_env passes with unmodified defaults" 1
+fi
+
+# validate_auth_delegator_env: auth namespace == app namespace rejected.
+if env AUTH_DELEGATOR_APP_NAMESPACE=vso-auth-delegator \
+    bash -c "source '$ENV_LIB'; validate_auth_delegator_env" >/dev/null 2>&1; then
+  check "identical auth/app namespaces are rejected" 1
+else
+  check "identical auth/app namespaces are rejected" 0
+fi
+
+# validate_auth_delegator_env: token expiration below 600s rejected.
+if env AUTH_DELEGATOR_TOKEN_EXPIRATION_SECONDS=599 \
+    bash -c "source '$ENV_LIB'; validate_auth_delegator_env" >/dev/null 2>&1; then
+  check "token expiration below 600s is rejected" 1
+else
+  check "token expiration below 600s is rejected" 0
+fi
+
+# validate_auth_delegator_env: identical vault/API audiences rejected.
+if env AUTH_DELEGATOR_API_AUDIENCE=vault \
+    bash -c "source '$ENV_LIB'; validate_auth_delegator_env" >/dev/null 2>&1; then
+  check "identical vault/API audiences are rejected" 1
+else
+  check "identical vault/API audiences are rejected" 0
+fi
+
+# validate_auth_delegator_env: API audience must equal VSO_OIDC_ISSUER.
+if env AUTH_DELEGATOR_API_AUDIENCE=https://not-the-issuer.example \
+    bash -c "source '$ENV_LIB'; validate_auth_delegator_env" >/dev/null 2>&1; then
+  check "API audience not matching VSO_OIDC_ISSUER is rejected" 1
+else
+  check "API audience not matching VSO_OIDC_ISSUER is rejected" 0
+fi
+
+# validate_auth_delegator_env: colliding names with the JWT/OIDC scenario
+# are rejected (namespace, mount, Secret, pod, policy, KV path).
+for collision_env in \
+    'AUTH_DELEGATOR_APP_NAMESPACE=vso-demo' \
+    'AUTH_DELEGATOR_AUTH_MOUNT=jwt-vso' \
+    'AUTH_DELEGATOR_AUTH_MOUNT=kubernetes-vso' \
+    'AUTH_DELEGATOR_SECRET_NAME=vso-demo-mysecret' \
+    'AUTH_DELEGATOR_APP_POD=vso-demo-app' \
+    'AUTH_DELEGATOR_POLICY=mysecret' \
+    'AUTH_DELEGATOR_KV_PATH=vault-demo/mysecret' \
+    ; do
+  if env "$collision_env" bash -c "source '$ENV_LIB'; validate_auth_delegator_env" >/dev/null 2>&1; then
+    check "collision rejected: ${collision_env}" 1
+  else
+    check "collision rejected: ${collision_env}" 0
+  fi
+done
+
+# auth_delegator_policy_hcl: prints a read-only policy scoped to the
+# dedicated KV v2 data path.
+POLICY_HCL="$(bash -c "source '$ENV_LIB'; auth_delegator_policy_hcl")"
+if printf '%s\n' "$POLICY_HCL" | grep -qF 'path "kv-v2/data/vso-auth-delegator/mysecret"' \
+    && printf '%s\n' "$POLICY_HCL" | grep -qF '"read"' \
+    && ! printf '%s\n' "$POLICY_HCL" | grep -qiF 'create\|update\|delete\|sudo'; then
+  check "auth_delegator_policy_hcl prints a read-only policy scoped to the dedicated KV path" 0
+else
+  check "auth_delegator_policy_hcl prints a read-only policy scoped to the dedicated KV path" 1
+fi
+
+# preflight_auth_delegator_runtime and the snapshot helpers must exist and
+# be callable without crashing, even with no live cluster.
+if bash -c "source '$ENV_LIB'; declare -f preflight_auth_delegator_runtime >/dev/null && declare -f capture_jwt_oidc_baseline_snapshot >/dev/null && declare -f capture_vso_demo_cr_snapshot >/dev/null"; then
+  check "preflight_auth_delegator_runtime and snapshot helper functions are defined" 0
+else
+  check "preflight_auth_delegator_runtime and snapshot helper functions are defined" 1
+fi
+
+if env VSO_CONTEXT=kind-definitely-does-not-exist-anywhere \
+    bash -c "source '$ENV_LIB'; preflight_auth_delegator_runtime" >/dev/null 2>&1; then
+  check "preflight_auth_delegator_runtime degrades gracefully when the VSO context does not exist" 0
+else
+  check "preflight_auth_delegator_runtime degrades gracefully when the VSO context does not exist" 1
+fi
+
 echo ""
 echo "Results: $pass passed, $fail failed."
 if [ "$fail" -ne 0 ]; then

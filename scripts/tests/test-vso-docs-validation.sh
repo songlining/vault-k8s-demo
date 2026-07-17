@@ -153,13 +153,13 @@ done
 # comparison context. We check that the surrounding text (the line itself
 # and ~10 lines of context) contains a legacy/comparison keyword.
 
-LEGACY_KEYWORDS='legacy|comparison|previous|older|not run by|not the default|not installed by|superseded|historical|side-by-side|not the default production|comparison path|never runs|never wired|not.*default|deliberately distinct|instead of|rather than|removes|no reviewer|purely as'
+LEGACY_KEYWORDS='legacy|comparison|previous|older|not run by|not the default|not installed by|superseded|historical|side-by-side|not the default production|comparison path|never runs|never wired|not.*default|deliberately distinct|instead of|rather than|removes|no reviewer|purely as|self-review|auth-delegator scenario|vso-auth-delegator'
 
 for doc in "${CUSTOMER_DOCS[@]}"; do
   doc_name="$(basename "$doc")"
 
   # Find lines with the stale terms, then check each has legacy context nearby.
-  stale_lines=$(grep -nE 'auth/kubernetes-vso|vault-token-reviewer|system:auth-delegator' "$doc" 2>/dev/null || true)
+  stale_lines=$(grep -nE 'auth/kubernetes-vso([^-]|$)|vault-token-reviewer|system:auth-delegator' "$doc" 2>/dev/null || true)
 
   if [ -z "$stale_lines" ]; then
     assert_pass "$doc_name has no stale default auth wording (auth/kubernetes-vso, vault-token-reviewer, system:auth-delegator) outside legacy context"

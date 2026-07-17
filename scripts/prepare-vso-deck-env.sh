@@ -2,9 +2,10 @@
 # scripts/prepare-vso-deck-env.sh
 #
 # Brings an existing Podman-backed two-cluster VSO lab back online before
-# `make vso-deck` verifies it. Missing kind control-plane containers are left
-# for the setup fallback to create; existing stopped containers are restarted
-# and checked for Kubernetes readiness.
+# the VSO/auth-delegator decks verify it. By default, a missing kind
+# control-plane container is left for the `make setup` fallback to create;
+# existing stopped containers are restarted and checked for Kubernetes
+# readiness.
 #
 # This script does not install Vault or VSO and does not change demo data.
 # The Makefile next verifies the existing environment and reuses healthy
@@ -13,6 +14,13 @@
 # Usage:
 #   KIND_EXPERIMENTAL_PROVIDER=podman scripts/prepare-vso-deck-env.sh
 #   scripts/prepare-vso-deck-env.sh --check-only
+#   scripts/prepare-vso-deck-env.sh --require-existing
+#
+#   --require-existing fails immediately (before starting Podman or waiting
+#   on Kubernetes) if either kind control-plane container is absent. It
+#   never creates, deletes, or suggests creating a cluster -- used by
+#   `make auth-delegator-deck`, which must never fall back to cluster
+#   creation. A stopped-but-existing container is still restarted as usual.
 
 set -euo pipefail
 
@@ -28,17 +36,21 @@ KUBERNETES_READY_SLEEP="${KUBERNETES_READY_SLEEP:-2}"
 KUBERNETES_NODE_TIMEOUT="${KUBERNETES_NODE_TIMEOUT:-120s}"
 
 CHECK_ONLY=0
+REQUIRE_EXISTING=0
 for arg in "$@"; do
   case "$arg" in
     --check-only)
       CHECK_ONLY=1
       ;;
+    --require-existing)
+      REQUIRE_EXISTING=1
+      ;;
     -h|--help)
-      sed -n '2,15p' "${BASH_SOURCE[0]}"
+      sed -n '2,22p' "${BASH_SOURCE[0]}"
       exit 0
       ;;
     *)
-      echo "ERROR: unknown argument '$arg' (supported: --check-only)" >&2
+      echo "ERROR: unknown argument '$arg' (supported: --check-only, --require-existing)" >&2
       exit 1
       ;;
   esac
@@ -53,6 +65,10 @@ fi
 if [ "$CHECK_ONLY" -eq 1 ]; then
   echo "OK: podman, kubectl, and kind are available; no machine, container, or cluster state was changed."
   exit 0
+fi
+
+if [ "$REQUIRE_EXISTING" -eq 1 ]; then
+  echo "NOTE: --require-existing is set; a missing kind control-plane container fails immediately (no cluster creation, no 'make setup' suggestion)."
 fi
 
 ensure_podman_ready() {
@@ -126,6 +142,12 @@ prepare_existing_cluster() {
   local state
 
   if ! podman container exists "$container"; then
+    if [ "$REQUIRE_EXISTING" -eq 1 ]; then
+      echo "ERROR: '${container}' does not exist." >&2
+      echo "       --require-existing never creates, recreates, or deletes a cluster." >&2
+      echo "       Create ${label} out-of-band first (e.g. 'make clusters' or 'make setup'), then re-run." >&2
+      return 1
+    fi
     echo "NOTE: '${container}' does not exist; 'make setup' will create ${label}."
     return 0
   fi

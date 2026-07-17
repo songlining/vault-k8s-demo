@@ -92,53 +92,6 @@ every login. JWT/OIDC removes that dependency: Vault discovers the public-key
 endpoint, obtains the signing keys, and verifies the JWT locally. No reviewer ServiceAccount is created and no
 `token_reviewer_jwt` is stored in Vault for the default path.
 
-### Can multiple Kubernetes issuers share one JWT mount?
-
-Technically, yes, when the Vault version supports the JWT auth method's
-`jwks_pairs` configuration. A single mount can then trust multiple JWKS
-endpoints, for example one endpoint from each Kubernetes cluster:
-
-```json
-{
-  "jwks_pairs": [
-    { "jwks_url": "https://cluster-a.example/openid/v1/jwks" },
-    { "jwks_url": "https://cluster-b.example/openid/v1/jwks" }
-  ]
-}
-```
-
-This is not a multi-value `bound_issuer`. Vault explicitly does not allow the
-mount-level `bound_issuer` setting when `jwks_pairs` is configured. Instead,
-each JWT role should bind the `iss` claim through role-level `bound_claims`, as
-well as binding the expected audience and subject:
-
-```json
-{
-  "role_type": "jwt",
-  "bound_claims": {
-    "iss": "https://cluster-a.example"
-  },
-  "bound_audiences": ["vault"],
-  "bound_subject": "system:serviceaccount:vso-demo:vso-demo"
-}
-```
-
-Without the role-level issuer binding, a valid token signed by any JWKS trusted
-by the shared mount could reach roles whose other claims happen to match. This
-is particularly important when two clusters use identical namespace and
-ServiceAccount names.
-
-For operational isolation, a dedicated JWT mount per Kubernetes cluster remains
-the recommended design. It gives each cluster an independent trust boundary,
-JWKS configuration, mount-scoped role collection and naming boundary, audit
-path, key-rotation lifecycle, and revocation point. For example, separate mounts
-can each define a role named `vso-demo` at
-`auth/jwt-cluster-a/role/vso-demo` and `auth/jwt-cluster-b/role/vso-demo`
-without sharing or colliding with each other's role configuration. This is not
-a Kubernetes namespace or a Vault Enterprise namespace. A shared `jwks_pairs`
-mount is technically valid when reducing mount count is important, but it
-increases configuration coupling and the blast radius of a mistake.
-
 ## What this scenario proves
 
 - Vault and VSO run in different clusters.
@@ -163,7 +116,7 @@ increases configuration coupling and the blast radius of a mistake.
 flowchart LR
   subgraph VSOCluster["VSO cluster · kind-vso-lab"]
     direction TB
-    K8sAPI["Kubernetes API server<br/>issuer · discovery · JWKS · TokenRequest"]
+    K8sAPI["Kubernetes API server<br/>ServiceAccount issuer<br/>OIDC discovery and JWKS<br/>TokenRequest API"]
     VSO["VSO controller"]
     Identity["ServiceAccount<br/>vso-demo/vso-demo"]
     Pipeline["VaultConnection → VaultAuth → VaultStaticSecret"]
@@ -224,40 +177,113 @@ sequenceDiagram
   participant Vault as Vault auth/jwt-vso<br/>(kind-vault-lab)
   participant OIDC as Kubernetes API OIDC endpoints<br/>(kind-vso-lab via VSO_OIDC_DISCOVERY_URL)
   participant KV as Vault KV v2
-  participant Secret as Kubernetes Secret<br/>vso-demo-mysecret
-  participant App as vso-demo-app
+  participant Kubelet as kubelet<br/>(kind-vso-lab)
+  participant App as vso-demo-app process
 
-  Note over VSO,App: Reconcile VaultConnection → VaultAuth → VaultStaticSecret
-  VSO->>K8s: POST /api/v1/namespaces/vso-demo/<br/>serviceaccounts/vso-demo/token<br/>Request audience "vault"
-  K8s-->>VSO: Return signed JWT<br/>(issuer, audience, subject, expiry)
-  Vault->>OIDC: GET /.well-known/openid-configuration<br/>(TLS verified with VSO cluster CA)
-  OIDC-->>Vault: Return issuer and advertised jwks_uri
-  Vault->>OIDC: GET /openid/v1/jwks<br/>(follow discovered jwks_uri)
-  OIDC-->>Vault: Return public signing keys
-  VSO->>Vault: POST auth/jwt-vso/login<br/>(role=vso-demo, jwt)
-  Vault->>Vault: Verify RS256 signature, issuer, audience,<br/>subject, and expiry
+  Note over Vault: Discovery and JWKS<br/>validated at setup<br/>cached at runtime
 
-  alt JWT satisfies every binding
-    Vault-->>VSO: Return short-lived Vault token<br/>(mysecret policy)
-    VSO->>KV: Read kv-v2/vault-demo/mysecret
-    KV-->>VSO: Return secret data
+  VSO->>VSO: Resolve VaultConnection and VaultAuth<br/>Get cached Vault client
+
+  alt Vault client or token is missing, invalid, or expired
+    VSO->>K8s: POST /api/v1/namespaces/vso-demo/<br/>serviceaccounts/vso-demo/token<br/>Request audience "vault" and expiry 600s
+    K8s-->>VSO: Return signed ServiceAccount JWT<br/>(iss, aud, sub, exp)
+    VSO->>Vault: POST auth/jwt-vso/login<br/>(role=vso-demo, jwt)
+
+    opt OIDC validator or key set needs initialisation or refresh
+      Vault->>OIDC: GET /.well-known/openid-configuration<br/>(TLS verified with VSO cluster CA)
+      OIDC-->>Vault: Return issuer and advertised jwks_uri
+      Vault->>OIDC: GET /openid/v1/jwks<br/>(follow advertised jwks_uri)
+      OIDC-->>Vault: Return RS256 public signing keys
+    end
+
+    Vault->>Vault: Verify signature, issuer, audience,<br/>subject, and expiry
+    break JWT signature or a bound claim is invalid
+      Vault-->>VSO: Reject login<br/>No Vault token issued
+    end
+    Vault-->>VSO: Return 1h non-renewable batch token<br/>(only mysecret policy)
+    Note over VSO,Vault: VSO caches and reuses this Vault token while valid.<br/>It cannot renew the batch token. Expiry causes a fresh TokenRequest and login.
+  else Cached Vault client and token are valid
+    VSO->>VSO: Reuse cached Vault token<br/>No TokenRequest or login
+  end
+
+  VSO->>KV: GET kv-v2/data/vault-demo/mysecret<br/>using the Vault batch token
+  KV-->>VSO: Return current secret data
+
+  alt First sync, Vault data changed, or destination Secret drifted
     VSO->>K8s: Create or update Secret/vso-demo-mysecret
-    K8s-->>Secret: Persist synchronised data
-    VSO->>K8s: Set VaultStaticSecret Ready=True
-    App->>Secret: Load values through envFrom at pod start
-    Secret-->>App: Provide environment variables
-  else Wrong issuer, audience, subject, signature, or expiry
-    Vault-->>VSO: Reject login<br/>No Vault token issued
+    K8s-->>VSO: Confirm Secret persisted
+  else Vault data and destination Secret are unchanged
+    VSO->>VSO: Skip destination Secret write
   end
 
-  loop Every refreshAfter interval (30s)
-    VSO->>KV: Re-read the Vault secret with valid auth
-    KV-->>VSO: Return current secret data
-    VSO->>K8s: Update Secret if the data changed
+  VSO->>K8s: Update VaultStaticSecret status<br/>(Ready=True, SecretMAC, client metadata)
+  K8s-->>VSO: Confirm status persisted
+
+  opt Pod starts or restarts
+    Kubelet->>K8s: Read Secret/vso-demo-mysecret for envFrom
+    K8s-->>Kubelet: Return Secret data
+    Kubelet-->>App: Inject environment variables<br/>Start container process
   end
 
-  Note over Secret,App: Secret rotation updates the Kubernetes object.<br/>An existing envFrom process needs a pod restart to load the new value.
 ```
+
+### Sequence accuracy notes
+
+- This diagram describes the current demo manifest, which sets
+  `refreshAfter: 30s` and does not set `syncConfig.instantUpdates`. VSO
+  therefore detects Vault-side secret changes through periodic reads rather
+  than Vault event notifications.
+- `refreshAfter: 30s` is the nominal polling target, not an exact wall-clock
+  interval. VSO 1.4 applies an earlier randomised requeue to spread controller
+  load; for a 30-second target, the implementation schedules approximately
+  24–27 seconds after the previous reconciliation.
+- The 10-minute ServiceAccount JWT is an input to Vault login; it is not used
+  to read the KV secret. Vault returns a separate one-hour batch token for that
+  purpose.
+- VSO caches the Vault client and batch token. The 30-second
+  `refreshAfter` reconciliation normally reuses that token; it does not request
+  a new ServiceAccount JWT or log in on every refresh. A cache miss, invalid or
+  expired token, configuration change, or rejected Vault request causes a new
+  TokenRequest and login.
+- Vault validates discovery reachability when the auth mount is configured.
+  Discovery metadata and JWKS requests during login are conditional because
+  Vault caches its validator and key material and refreshes them when needed.
+- VSO reads Vault on every scheduled `VaultStaticSecret` reconciliation. With
+  HMAC comparison enabled by default, it writes the destination Kubernetes
+  Secret only for the first sync, changed Vault data, destination drift, or a
+  relevant resource change.
+- `envFrom` is resolved by the kubelet when the Pod starts. VSO can update the
+  Kubernetes Secret later, but Kubernetes does not rewrite environment
+  variables inside an existing process.
+
+### Optional event-driven instant updates
+
+VSO can also subscribe to Vault KV change events and enqueue a reconciliation
+without waiting for the polling interval:
+
+```yaml
+spec:
+  refreshAfter: 1h
+  syncConfig:
+    instantUpdates: true
+```
+
+In that mode, VSO opens a WebSocket subscription to
+`/v1/sys/events/subscribe/kv*`. A matching Vault event triggers a reconcile and
+secret read; `refreshAfter` can remain as a slower safety-net reconciliation.
+
+This mode requires:
+
+- Vault Enterprise `1.16.3` or later with event notifications available;
+- the VSO Vault policy to permit the KV event subscription, including read
+  access to `sys/events/subscribe/kv*` and the required KV event subscription
+  capabilities; and
+- network infrastructure that permits the long-lived WebSocket connection.
+
+The local demo intentionally keeps `instantUpdates` disabled because it uses
+the standard community Vault chart path and is designed to work without a
+Vault Enterprise licence. Its demonstrated rotation path therefore relies on
+the 30-second polling configuration.
 
 ## Resources
 
@@ -594,6 +620,58 @@ creates a `vault-token-reviewer` ServiceAccount and
 `auth/kubernetes-vso`. To opt into it manually for comparison, run
 `ENABLE_TOKEN_REVIEWER_AUTH=1 scripts/setup-vso-cluster.sh` before the legacy
 configuration script. It is not the default demonstrated architecture.
+
+## Further design considerations
+
+The following is optional design guidance for deployments serving multiple
+Kubernetes clusters. It is not required for this two-cluster demo.
+
+### Can multiple Kubernetes issuers share one JWT mount?
+
+Technically, yes, when the Vault version supports the JWT auth method's
+`jwks_pairs` configuration. A single mount can then trust multiple JWKS
+endpoints, for example one endpoint from each Kubernetes cluster:
+
+```json
+{
+  "jwks_pairs": [
+    { "jwks_url": "https://cluster-a.example/openid/v1/jwks" },
+    { "jwks_url": "https://cluster-b.example/openid/v1/jwks" }
+  ]
+}
+```
+
+This is not a multi-value `bound_issuer`. Vault explicitly does not allow the
+mount-level `bound_issuer` setting when `jwks_pairs` is configured. Instead,
+each JWT role should bind the `iss` claim through role-level `bound_claims`, as
+well as binding the expected audience and subject:
+
+```json
+{
+  "role_type": "jwt",
+  "bound_claims": {
+    "iss": "https://cluster-a.example"
+  },
+  "bound_audiences": ["vault"],
+  "bound_subject": "system:serviceaccount:vso-demo:vso-demo"
+}
+```
+
+Without the role-level issuer binding, a valid token signed by any JWKS trusted
+by the shared mount could reach roles whose other claims happen to match. This
+is particularly important when two clusters use identical namespace and
+ServiceAccount names.
+
+For operational isolation, a dedicated JWT mount per Kubernetes cluster remains
+the recommended design. It gives each cluster an independent trust boundary,
+JWKS configuration, mount-scoped role collection and naming boundary, audit
+path, key-rotation lifecycle, and revocation point. For example, separate mounts
+can each define a role named `vso-demo` at
+`auth/jwt-cluster-a/role/vso-demo` and `auth/jwt-cluster-b/role/vso-demo`
+without sharing or colliding with each other's role configuration. This is not
+a Kubernetes namespace or a Vault Enterprise namespace. A shared `jwks_pairs`
+mount is technically valid when reducing mount count is important, but it
+increases configuration coupling and the blast radius of a mistake.
 
 ## Cleanup
 

@@ -160,6 +160,28 @@ host.
 > Linux host, you can override `TWO_CLUSTER_HOST` to your host's real IP on
 > the Podman network instead.
 
+### Vault-to-VSO TokenReview path (client JWT self-review scenario, port 6444)
+
+The optional client-JWT-self-review VSO scenario (`make auth-delegator-deck`,
+see
+[docs/vso-kubernetes-auth-delegator-demo.md](docs/vso-kubernetes-auth-delegator-demo.md))
+reuses the SAME `VSO_API_ADDR`/`VSO_API_HOST_PORT` mapping
+(`https://host.containers.internal:6444` by default) as the default JWT/OIDC
+scenario's discovery/JWKS path, but for a different call: Vault's dedicated
+`auth/kubernetes-vso-self-review` mount makes a live, per-login
+`POST /apis/authentication.k8s.io/v1/tokenreviews` request to this same
+address, using the client's own short-lived ServiceAccount JWT as the
+`Authorization: Bearer` header. This is why the credential-provider config
+requests a token whose audiences include both `vault` and the VSO cluster's
+issuer URL -- the issuer-URL audience is what lets the same JWT authenticate
+as the outer HTTP bearer for this TokenReview call, since the VSO
+kube-apiserver does not set `--api-audiences` and therefore defaults its
+accepted audience to its own issuer.
+
+No new port mapping, kube-apiserver flag, or cluster recreation is required
+for this scenario -- it reuses the existing port-6444 mapping and CA trust
+already established for OIDC discovery.
+
 ## Troubleshooting
 
 ### kind cannot connect to Podman
@@ -237,6 +259,28 @@ the networking section above), or `403`s from Vault (policy/role mismatch,
 see above). If you're deliberately using the legacy `auth/kubernetes-vso`
 comparison path, also look for TokenReview/RBAC errors (missing
 `vault-token-reviewer`/`system:auth-delegator` binding).
+
+### Client JWT self-review login (`auth/kubernetes-vso-self-review`) fails
+
+This is the opt-in scenario from
+[docs/vso-kubernetes-auth-delegator-demo.md](docs/vso-kubernetes-auth-delegator-demo.md)
+(`make auth-delegator-deck`), separate from the default JWT/OIDC path above.
+Since Vault's TokenReview call to the VSO cluster reuses the port-6444
+mapping, first rule out the same connectivity issues as the OIDC path
+(`make check-vault-connectivity`, host port mappings). If connectivity is
+fine, check:
+
+- the live mount config has `disable_local_ca_jwt=true`,
+  `disable_iss_validation=true`, and no stored reviewer JWT:
+  `kubectl --context kind-vault-lab exec vault-0 -n default -- vault read auth/kubernetes-vso-self-review/config`;
+- the VSO cluster's advertised issuer still equals
+  `AUTH_DELEGATOR_API_AUDIENCE`/`VSO_OIDC_ISSUER` (a dual-audience token
+  needs both to match exactly); and
+- the scenario ClusterRoleBinding
+  (`vso-auth-delegator-self-review`) still grants `system:auth-delegator`
+  to exactly the self-review ServiceAccount --
+  `make auth-delegator-verify` proves this and every other gate
+  non-interactively, including the direct same-JWT TokenReview proof.
 
 ## Compatibility
 

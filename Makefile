@@ -1,7 +1,9 @@
 .PHONY: help setup clusters setup-vault setup-vso configure-vso-auth configure-vso-jwt-auth vso-apply \
         demo verify status logs-otel logs-agent \
         vso-demo vso-deck vso-verify vso-status logs-vso \
-        check-vault-connectivity verify-two-cluster
+        check-vault-connectivity verify-two-cluster \
+        configure-auth-delegator auth-delegator-apply auth-delegator-setup \
+        auth-delegator-verify auth-delegator-status auth-delegator-deck
 .DEFAULT_GOAL := help
 
 # --------------------------------------------------------------------------
@@ -153,3 +155,58 @@ vso-status: ## Show Kubernetes resources used by the VSO demo across both cluste
 
 logs-vso: ## Show recent Vault Secrets Operator controller logs (context: VSO_CONTEXT)
 	@kubectl --context $(VSO_CONTEXT) logs -n vault-secrets-operator-system -l app.kubernetes.io/name=vault-secrets-operator --tail=80
+
+## --- Client-JWT-self-review VSO scenario (docs/vso-kubernetes-auth-delegator-plan.md) --
+#
+# A second, parallel VSO scenario that coexists with (and never modifies)
+# the default JWT/OIDC scenario above. VSO's own short-lived, dual-audience
+# ServiceAccount JWT is both the login credential presented to Vault AND
+# the HTTP bearer Vault uses for its own Kubernetes TokenReview call,
+# authorized by a scenario-owned system:auth-delegator ClusterRoleBinding.
+# None of these targets create, delete, or recreate a kind cluster, or run
+# Helm install/upgrade.
+
+configure-auth-delegator: ## Configure the dedicated auth/kubernetes-vso-self-review Vault Kubernetes auth mount, role, and policy
+	@bash scripts/configure-vso-auth-delegator.sh
+
+auth-delegator-apply: ## Apply the cross-namespace VSO resources (namespaces, ServiceAccounts, CRB, VaultConnection/VaultAuth/VaultStaticSecret, app pod)
+	@bash scripts/apply-vso-auth-delegator-demo.sh
+
+auth-delegator-setup: configure-auth-delegator auth-delegator-apply ## Configure only the dedicated auth mount and apply only the new scenario resources
+
+auth-delegator-verify: ## Full end-to-end proof: placement, RBAC, direct TokenReview, Vault login negatives, cross-namespace sync, and CAS rotation
+	@bash scripts/verify-vso-auth-delegator.sh
+
+auth-delegator-status: ## Show Kubernetes resources used by the client-JWT-self-review scenario across both clusters
+	@echo "Vault cluster (context: $(VAULT_CONTEXT)):"
+	@kubectl --context $(VAULT_CONTEXT) get pods -n default -l app.kubernetes.io/name=vault
+	@echo ""
+	@echo "VSO cluster (context: $(VSO_CONTEXT)):"
+	@kubectl --context $(VSO_CONTEXT) get namespace vso-auth-delegator vso-auth-delegator-app 2>/dev/null || true
+	@echo ""
+	@kubectl --context $(VSO_CONTEXT) get serviceaccount,clusterrolebinding -n vso-auth-delegator-app 2>/dev/null | grep -E 'vso-auth-delegator|NAME' || true
+	@echo ""
+	@kubectl --context $(VSO_CONTEXT) get vaultconnection,vaultauth -n vso-auth-delegator 2>/dev/null || true
+	@echo ""
+	@kubectl --context $(VSO_CONTEXT) get vaultstaticsecret,secret,pod -n vso-auth-delegator-app 2>/dev/null || true
+
+auth-delegator-deck: ## Health-first: verify both scenarios (reconciling this one only if unhealthy), then run the Presenterm auth-delegator deck
+	@command -v presenterm >/dev/null 2>&1 || { echo "presenterm not installed: brew install presenterm"; exit 1; }
+	@echo "==> [auth-delegator-deck 1/5] Starting Podman and requiring existing kind control planes (no cluster creation)"
+	@KIND_EXPERIMENTAL_PROVIDER=podman bash scripts/prepare-vso-deck-env.sh --require-existing
+	@echo "==> [auth-delegator-deck 2/5] Verifying the existing default JWT/OIDC scenario is healthy (--skip-rotation)"
+	@bash scripts/verify-two-cluster.sh --skip-rotation
+	@set -e; \
+		echo "==> [auth-delegator-deck 3/5] Health-checking the client-JWT-self-review scenario (--skip-rotation)"; \
+		if bash scripts/verify-vso-auth-delegator.sh --skip-rotation; then \
+			echo "==> Existing auth-delegator resources are healthy; skipping setup and reusing them unchanged."; \
+		else \
+			echo "==> Existing auth-delegator resources are incomplete or unhealthy; running setup once."; \
+			$(MAKE) --no-print-directory auth-delegator-setup; \
+		fi
+	@echo "==> [auth-delegator-deck 4/5] Running the full auth-delegator verifier (including reversible CAS rotation)"
+	@bash scripts/verify-vso-auth-delegator.sh
+	@echo "==> [auth-delegator-deck 5/5] Re-verifying the default JWT/OIDC scenario shows no regression (--skip-rotation)"
+	@bash scripts/verify-two-cluster.sh --skip-rotation
+	@echo "==> All checkpoints passed; launching Presenterm"
+	@exec presenterm -x presenterm/auth-delegator.md
