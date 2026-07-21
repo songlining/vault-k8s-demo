@@ -558,7 +558,7 @@ cleanup_deny_check() {
   trap - EXIT INT TERM
   if [ "$DENY_CHECK_ARMED" -eq 1 ]; then
     echo "==> Cleanup: removing temporary deny-check namespace '${DENY_CHECK_NAMESPACE}'..." >&2
-    kubectl_vso delete namespace "$DENY_CHECK_NAMESPACE" --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+    kubectl_vso delete namespace "$DENY_CHECK_NAMESPACE" --ignore-not-found=true --wait=true >/dev/null 2>&1 || true
   fi
   exit "$exit_status"
 }
@@ -600,7 +600,7 @@ if kubectl_vso get secret "$DENY_CHECK_SECRET_NAME" -n "$DENY_CHECK_NAMESPACE" >
 fi
 echo "OK: allowedNamespaces correctly denies a third namespace (no Ready status, no Secret created)."
 
-kubectl_vso delete namespace "$DENY_CHECK_NAMESPACE" --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+kubectl_vso delete namespace "$DENY_CHECK_NAMESPACE" --ignore-not-found=true --wait=true >/dev/null 2>&1 || true
 DENY_CHECK_ARMED=0
 trap - EXIT INT TERM
 echo "OK: temporary deny-check namespace removed."

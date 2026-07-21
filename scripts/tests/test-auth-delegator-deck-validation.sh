@@ -8,6 +8,11 @@
 # plus additional checks specific to this deck's stricter safety
 # requirements (no raw JWT/token/secret/CA output at all).
 #
+# The deck is a read-only 12-slide auth flow (k8s RBAC -> token
+# claims/self-review -> Vault mount/role/policy -> login proofs -> app
+# consumption). No slide mutates Vault or Kubernetes; no script-path
+# +exec blocks are present.
+#
 # Never launches presenterm (needs a real PTY) or executes a live +exec
 # block. Live slide-walk validation is
 # scripts/validate-deck-visual.sh; live Ctrl+E rehearsal against a real
@@ -64,10 +69,10 @@ else
 fi
 
 end_slide_count=$(grep -c '<!-- end_slide -->' "$DECK")
-if [ "$end_slide_count" -ge 10 ]; then
-  assert_pass "deck has $end_slide_count end_slide markers (>= 10)"
+if [ "$end_slide_count" -ge 8 ]; then
+  assert_pass "deck has $end_slide_count end_slide markers (>= 8)"
 else
-  assert_fail "deck has only $end_slide_count end_slide markers (expected >= 10)"
+  assert_fail "deck has only $end_slide_count end_slide markers (expected >= 8)"
 fi
 
 if head -1 "$DECK" | grep -q '^---$'; then
@@ -147,7 +152,12 @@ else
   echo "$bare_kubectl_in_exec" | sed 's/^/  /'
 fi
 
-# --- 4. Script-path +exec blocks use a working-directory guard ---------------
+# --- 4. Script-path +exec blocks (none expected in read-only deck) ---------
+# The revamp removed all scripts/ invocations from the deck. Every +exec
+# block is a self-contained read-only command (kubectl/get, vault read,
+# vault write login, kubectl exec printenv, curl TokenReview). Assert
+# zero script-path blocks exist. Keep the guard logic in case one is
+# later re-added.
 
 script_exec_blocks=$(awk '
   /^```bash \+exec/ { in_block=1; block=""; next }
@@ -155,7 +165,10 @@ script_exec_blocks=$(awk '
   { if (in_block) block = block $0 "\n" }
 ' "$DECK")
 
-if [ -n "$script_exec_blocks" ]; then
+if [ -z "$script_exec_blocks" ]; then
+  assert_pass "deck has zero script-path +exec blocks (all blocks are read-only)"
+else
+  # If any scripts/ blocks reappear, verify they have a working-directory guard
   guard_missing=0
   script_block_count=0
   current_block=""
@@ -178,8 +191,6 @@ if [ -n "$script_exec_blocks" ]; then
   else
     assert_fail "$guard_missing of $script_block_count script-path +exec block(s) missing a working-directory guard"
   fi
-else
-  assert_fail "expected at least one script-path +exec block (calling scripts/verify-vso-auth-delegator.sh)"
 fi
 
 # --- 5. Deck references the dedicated auth mount/scenario, never the ---------
@@ -294,48 +305,37 @@ else
   echo "$box_outside_fence" | sed 's/^/  /'
 fi
 
-# --- 9. The one mutating proof is a single, trap-protected verifier call ----
+# --- 9. All +exec blocks are read-only (no mutating scripts/ calls) ----------
 #
-# The deny-by-default + CAS rotation proof must be delegated to the actual
-# verifier script (which owns the HUP/INT/TERM traps and CAS-version
-# checks) rather than hand-rolled inline mutation logic in the deck, and it
-# must appear in exactly one place (mutation+observation+restoration
-# complete inside one block, per the plan's Phase 6 requirement).
+# The revamp removed every scripts/ invocation from the deck. Every +exec
+# block is a self-contained read-only command. Assert the deck contains
+# ZERO calls to scripts/verify-vso-auth-delegator.sh — the verifier is
+# only called by make auth-delegator-deck's startup gates, never from
+# inside the deck itself.
 
 rotation_call_count=$(printf '%s' "$exec_only" | grep -cF 'bash scripts/verify-vso-auth-delegator.sh' || true)
-if [ "$rotation_call_count" -ge 1 ]; then
-  assert_pass "deck delegates the mutating deny-check/rotation proof to scripts/verify-vso-auth-delegator.sh ($rotation_call_count call(s))"
+if [ "$rotation_call_count" -eq 0 ]; then
+  assert_pass "deck contains zero calls to scripts/verify-vso-auth-delegator.sh (all +exec blocks are read-only)"
 else
-  assert_fail "deck does not appear to call scripts/verify-vso-auth-delegator.sh for the mutating proof"
+  assert_fail "deck calls scripts/verify-vso-auth-delegator.sh ($rotation_call_count call(s)); expected zero (all +exec blocks should be read-only)"
 fi
 
-# No exec block should call `vault kv put`/`vault write .../data/` directly
-# (that would be hand-rolled mutation without the verifier's own trap).
+# No exec block should call `vault kv put`/`vault write .../data/` directly.
 if printf '%s' "$exec_only" | grep -qE 'vault kv put|vault write .*kv-v2/data/'; then
-  assert_fail "deck contains a hand-rolled KV mutation outside the trap-protected verifier call"
+  assert_fail "deck contains a hand-rolled KV mutation"
 else
-  assert_pass "deck contains no hand-rolled KV mutation (all mutation goes through the trap-protected verifier)"
+  assert_pass "deck contains no hand-rolled KV mutation (all blocks are read-only)"
 fi
 
-# --- 10. Reset slide is non-destructive -------------------------------------
+# --- 10. No destructive commands anywhere in the deck ------------------------
+#
+# The revamp removed the Reset slide. Assert no destructive command
+# (namespace/cluster deletion, Helm uninstall) appears anywhere.
 
-reset_block="$(awk '
-  /^Reset/ { found=1 }
-  found { print }
-' "$DECK")"
-if [ -n "$reset_block" ]; then
-  if printf '%s' "$reset_block" | grep -qE 'delete (namespace|cluster)|kind delete|helm uninstall'; then
-    assert_fail "Reset slide contains a destructive command"
-  else
-    assert_pass "Reset slide is non-destructive"
-  fi
-  if printf '%s' "$reset_block" | grep -qF -- '--skip-rotation'; then
-    assert_pass "Reset slide re-confirms health without re-mutating (--skip-rotation)"
-  else
-    assert_fail "Reset slide does not appear to use --skip-rotation"
-  fi
+if printf '%s' "$DECK_CONTENTS" | grep -qE 'delete (namespace|cluster)|kind delete|helm uninstall'; then
+  assert_fail "deck contains a destructive command (delete/helm uninstall)"
 else
-  assert_fail "expected a Reset slide"
+  assert_pass "deck contains no destructive commands"
 fi
 
 # --- 11. validate-deck-visual.sh exists and is referenced by this scenario --

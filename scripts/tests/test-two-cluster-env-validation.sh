@@ -224,8 +224,8 @@ get_ad_default() {
   printf '%s\n' "$AUTH_DELEGATOR_DEFAULTS_OUTPUT" | sed -n "s/^$1=//p"
 }
 
-assert_var_eq "default AUTH_DELEGATOR_AUTH_NAMESPACE is 'vso-auth-delegator'" \
-  "$(get_ad_default AUTH_DELEGATOR_AUTH_NAMESPACE)" "vso-auth-delegator"
+assert_var_eq "default AUTH_DELEGATOR_AUTH_NAMESPACE is 'vso-auth-config'" \
+  "$(get_ad_default AUTH_DELEGATOR_AUTH_NAMESPACE)" "vso-auth-config"
 assert_var_eq "default AUTH_DELEGATOR_APP_NAMESPACE is 'vso-auth-delegator-app'" \
   "$(get_ad_default AUTH_DELEGATOR_APP_NAMESPACE)" "vso-auth-delegator-app"
 assert_var_eq "default AUTH_DELEGATOR_SELF_REVIEW_SA is 'vso-auth-delegator'" \
@@ -292,7 +292,7 @@ else
 fi
 
 # validate_auth_delegator_env: auth namespace == app namespace rejected.
-if env AUTH_DELEGATOR_APP_NAMESPACE=vso-auth-delegator \
+if env AUTH_DELEGATOR_APP_NAMESPACE=vso-auth-config \
     bash -c "source '$ENV_LIB'; validate_auth_delegator_env" >/dev/null 2>&1; then
   check "identical auth/app namespaces are rejected" 1
 else

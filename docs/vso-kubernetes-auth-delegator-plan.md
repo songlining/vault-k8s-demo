@@ -153,7 +153,7 @@ Proposed defaults:
 
 | Purpose | Default |
 | --- | --- |
-| Auth/config namespace | `vso-auth-delegator` |
+| Auth/config namespace | `vso-auth-config` |
 | Consumer/app namespace | `vso-auth-delegator-app` |
 | Self-review ServiceAccount | `vso-auth-delegator` in the consumer namespace |
 | App ServiceAccount | `vso-auth-delegator-app` in the consumer namespace |
@@ -197,7 +197,7 @@ flowchart LR
     API["Kubernetes API / TokenReview"]
     Controller["VSO controller\nvault-secrets-operator-system"]
 
-    subgraph AuthNS["namespace: vso-auth-delegator"]
+    subgraph AuthNS["namespace: vso-auth-config"]
       Connection["VaultConnection"]
       Auth["VaultAuth\nallowedNamespaces: vso-auth-delegator-app"]
     end
@@ -412,7 +412,7 @@ The mutating mode will:
    - `tokenExpirationSeconds: 600`; and
    - `allowedNamespaces` containing only the consumer namespace.
 10. Create `VaultStaticSecret` in the consumer namespace with a
-    `vaultAuthRef` of `vso-auth-delegator/vso-auth-delegator`.
+    `vaultAuthRef` of `vso-auth-config/vso-auth-delegator`.
 11. Materialize the destination Secret in the consumer namespace.
 12. Run a plain, single-container app under the unprivileged app
     ServiceAccount, consuming the native Secret through `envFrom`.

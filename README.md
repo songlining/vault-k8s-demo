@@ -60,7 +60,7 @@ The repository uses two Podman-backed kind clusters:
   the baseline sidecar pod, and the OTel metrics workload.
 - `kind-vso-lab` (`VSO_CONTEXT`) runs Vault Secrets Operator, its CRDs, and
   the plain `vso-demo-app` consumer, plus the client-JWT-self-review
-  scenario's dedicated namespaces (`vso-auth-delegator`,
+  scenario's dedicated namespaces (`vso-auth-config`,
   `vso-auth-delegator-app`) and app.
 
 The sidecar and OTel scenarios use only the Vault cluster. Both VSO scenarios

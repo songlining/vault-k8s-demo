@@ -182,16 +182,17 @@ auth-delegator-status: ## Show Kubernetes resources used by the client-JWT-self-
 	@kubectl --context $(VAULT_CONTEXT) get pods -n default -l app.kubernetes.io/name=vault
 	@echo ""
 	@echo "VSO cluster (context: $(VSO_CONTEXT)):"
-	@kubectl --context $(VSO_CONTEXT) get namespace vso-auth-delegator vso-auth-delegator-app 2>/dev/null || true
+	@kubectl --context $(VSO_CONTEXT) get namespace vso-auth-config vso-auth-delegator-app 2>/dev/null || true
 	@echo ""
 	@kubectl --context $(VSO_CONTEXT) get serviceaccount,clusterrolebinding -n vso-auth-delegator-app 2>/dev/null | grep -E 'vso-auth-delegator|NAME' || true
 	@echo ""
-	@kubectl --context $(VSO_CONTEXT) get vaultconnection,vaultauth -n vso-auth-delegator 2>/dev/null || true
+	@kubectl --context $(VSO_CONTEXT) get vaultconnection,vaultauth -n vso-auth-config 2>/dev/null || true
 	@echo ""
 	@kubectl --context $(VSO_CONTEXT) get vaultstaticsecret,secret,pod -n vso-auth-delegator-app 2>/dev/null || true
 
-auth-delegator-deck: ## Health-first: verify both scenarios (reconciling this one only if unhealthy), then run the Presenterm auth-delegator deck
+auth-delegator-deck: ## Health-first: verify both scenarios (reconciling this one only if unhealthy), then run the Presenterm auth-delegator deck. SKIP_PREFLIGHT=1 bypasses the health gates
 	@command -v presenterm >/dev/null 2>&1 || { echo "presenterm not installed: brew install presenterm"; exit 1; }
+ifeq ($(SKIP_PREFLIGHT),)
 	@echo "==> [auth-delegator-deck 1/5] Starting Podman and requiring existing kind control planes (no cluster creation)"
 	@KIND_EXPERIMENTAL_PROVIDER=podman bash scripts/prepare-vso-deck-env.sh --require-existing
 	@echo "==> [auth-delegator-deck 2/5] Verifying the existing default JWT/OIDC scenario is healthy (--skip-rotation)"
@@ -209,4 +210,7 @@ auth-delegator-deck: ## Health-first: verify both scenarios (reconciling this on
 	@echo "==> [auth-delegator-deck 5/5] Re-verifying the default JWT/OIDC scenario shows no regression (--skip-rotation)"
 	@bash scripts/verify-two-cluster.sh --skip-rotation
 	@echo "==> All checkpoints passed; launching Presenterm"
+else
+	@echo "==> SKIP_PREFLIGHT=1: bypassing all health gates; launching Presenterm directly (environment is assumed healthy)"
+endif
 	@exec presenterm -x presenterm/auth-delegator.md

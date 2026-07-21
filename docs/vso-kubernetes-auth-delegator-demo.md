@@ -49,7 +49,7 @@ flowchart LR
     API["Kubernetes API / TokenReview"]
     Controller["VSO controller"]
 
-    subgraph AuthNS["ns: vso-auth-delegator"]
+    subgraph AuthNS["ns: vso-auth-config"]
       Connection["VaultConnection"]
       Auth["VaultAuth\nallowedNamespaces: vso-auth-delegator-app"]
     end
@@ -125,7 +125,7 @@ variable.
 
 | Purpose | Default |
 | --- | --- |
-| Auth/config namespace | `vso-auth-delegator` |
+| Auth/config namespace | `vso-auth-config` |
 | Consumer/app namespace | `vso-auth-delegator-app` |
 | Self-review ServiceAccount | `vso-auth-delegator` (in the app namespace only) |
 | App ServiceAccount | `vso-auth-delegator-app` (in the app namespace) |
@@ -169,10 +169,10 @@ variable.
 ## Cross-namespace semantics
 
 `VaultConnection` and `VaultAuth` are defined once, centrally, in the auth
-namespace (`vso-auth-delegator`). The `VaultAuth`'s `allowedNamespaces`
+namespace (`vso-auth-config`). The `VaultAuth`'s `allowedNamespaces`
 contains only the consumer namespace (`vso-auth-delegator-app`).
 `VaultStaticSecret` lives in the consumer namespace and references the
-`VaultAuth` cross-namespace as `vso-auth-delegator/vso-auth-delegator`
+`VaultAuth` cross-namespace as `vso-auth-config/vso-auth-delegator`
 (`namespace/name`).
 
 The Kubernetes ServiceAccount used for login is resolved from the
@@ -181,6 +181,114 @@ The Kubernetes ServiceAccount used for login is resolved from the
 cross-namespace behavior, proven live by the verifier (`make
 auth-delegator-verify`), which also proves a third, non-allow-listed
 namespace is denied by `allowedNamespaces` with no Secret created.
+
+## Scaling to multiple consumer namespaces
+
+This demo ships with **one** consumer namespace
+(`vso-auth-delegator-app`). To serve secrets to additional namespaces, you
+must widen **all three** of the gates that currently pin to that single
+namespace -- and there is one non-obvious requirement: VSO resolves the
+login ServiceAccount from the **consuming** resource's namespace, so each
+new namespace needs its own privileged self-review ServiceAccount.
+
+### The three single-namespace gates
+
+| Gate | Where | Current value |
+| --- | --- | --- |
+| VSO allow-list | `VaultAuth.spec.allowedNamespaces` | `[ vso-auth-delegator-app ]` |
+| Kubernetes RBAC | `ClusterRoleBinding` `subjects[]` | `vso-auth-delegator-app / vso-auth-delegator` (one subject) |
+| Vault role binding | role `bound_service_account_namespaces` | `vso-auth-delegator-app` |
+
+The central `VaultConnection` and `VaultAuth` stay shared. The
+`VaultAuth.spec.kubernetes.serviceAccount` field holds a **name**
+(`vso-auth-delegator`), not a `namespace/name` -- VSO looks for that
+ServiceAccount *in whichever namespace the consuming* `VaultStaticSecret`
+*lives*. So each consumer namespace must contain an identically named
+self-review ServiceAccount.
+
+### Topology for N namespaces
+
+```mermaid
+flowchart LR
+  subgraph AuthNS["ns: vso-auth-config (shared)"]
+    Auth["VaultAuth
+allowedNamespaces: [app-a, app-b, app-c]
+serviceAccount: vso-auth-delegator"]
+  end
+  subgraph AppA["ns: app-a"]
+    SAa["SA: vso-auth-delegator
+system:auth-delegator"]
+    VSSa["VaultStaticSecret -> Secret -> app"]
+  end
+  subgraph AppB["ns: app-b"]
+    SAb["SA: vso-auth-delegator
+system:auth-delegator"]
+    VSSb["VaultStaticSecret -> Secret -> app"]
+  end
+  subgraph AppC["ns: app-c"]
+    SAc["SA: vso-auth-delegator
+system:auth-delegator"]
+    VSSc["VaultStaticSecret -> Secret -> app"]
+  end
+  Auth -.allow.-> AppA & AppB & AppC
+```
+
+Each namespace's flow runs the full end-to-end sequence independently
+(steps [1]-[8] from the deck), each with its own self-review
+ServiceAccount, its own 600s dual-audience token, its own batch Vault
+token, and its own destination Secret.
+
+### Per-namespace checklist
+
+For each additional consumer namespace, apply these changes together:
+
+1. **VSO allow-list** -- add the namespace to
+   `VaultAuth.spec.allowedNamespaces`.
+2. **Self-review ServiceAccount** -- create `vso-auth-delegator` *in the
+   new namespace* with `automountServiceAccountToken: false` (VSO still
+   mints the bounded 600s token via `TokenRequest`).
+3. **Kubernetes RBAC** -- grant `system:auth-delegator` to that
+   ServiceAccount. Prefer **one ClusterRoleBinding per namespace** (each
+   with exactly one subject) to preserve this scenario's one-subject-per-
+   binding invariant and keep removals clean; avoid one giant shared
+   ClusterRoleBinding whose subject list must be hand-edited.
+4. **Vault role** -- add the namespace to
+   `bound_service_account_namespaces` as an explicit list (for example
+   `[vso-auth-delegator-app, app-a, app-b]`). **Never use `*`** --
+   wildcard namespace access is explicitly out of scope for this scenario
+   and removes Vault's namespace boundary.
+5. **Consumer resources** -- add the namespace's `VaultStaticSecret`
+   referencing the shared `VaultAuth` as
+   `vso-auth-config/vso-auth-delegator`, plus its destination Secret and
+   the app pod (running under a separate **unprivileged** app
+   ServiceAccount, as in this demo).
+
+The dual-audience token, the mount with no stored reviewer, and the
+least-privilege policy are unchanged.
+
+### Security trade-off: "exactly one" becomes "one per namespace"
+
+This scenario's core RBAC claim is *"exactly one identity can review
+tokens."* With N consumer namespaces you **deliberately widen** that to *N*
+privileged identities. It stays tight -- one self-review ServiceAccount per
+namespace, never the app ServiceAccount, never `default` -- but it is no
+longer a single global reviewer. Each consumer namespace is now an
+independent TokenReview-granting surface, so treat each allow-listed
+namespace as equally trusted.
+
+### When to switch to the dedicated-reviewer model instead
+
+Client self-review scales well to a **handful of trusted** namespaces. For
+**many** namespaces, or any untrusted / multi-tenant workload, it becomes
+heavy: N privileged ServiceAccounts to manage and N TokenReview grants to
+audit. The better fit is the **dedicated reviewer** model (the second row
+of the comparison table above): one reviewer ServiceAccount JWT stored in
+Vault via `token_reviewer_jwt`, used for every namespace's TokenReview. The
+trade-off flips -- instead of N short-lived privileged client
+ServiceAccounts, you have a single stored credential in Vault to rotate
+carefully, and clients need **zero** `system:auth-delegator`. See
+`scripts/configure-vso-kubernetes-auth.sh` for the existing opt-in
+dedicated-reviewer path.
 
 ## Setup
 
@@ -271,16 +379,15 @@ This target is health-first and never falls back to cluster creation:
    regression.
 7. Only then launches `presenterm -x presenterm/auth-delegator.md`.
 
-The deck itself (`presenterm/auth-delegator.md`) is a technical lab deck
-parallel to [`presenterm/vso.md`](../presenterm/vso.md): every `+exec`
-block uses an explicit `--context`, no raw JWT/Vault-token/secret/CA
-material is ever printed, and the one mutating proof (deny-by-default plus
-CAS rotation) runs entirely inside a single trap-protected
-`scripts/verify-vso-auth-delegator.sh` invocation -- mutation, observation,
-and restoration all complete before that block (and the slide) ends. The
-final Reset slide is non-destructive: it only re-runs the `--skip-rotation`
-health check to confirm a clean, repeatable baseline. No slide creates,
-deletes, or recreates a cluster, and none runs Helm.
+The deck itself (`presenterm/auth-delegator.md`) is a 12-slide read-only
+auth walkthrough: every `+exec` block uses an explicit `--context`, no raw
+JWT/Vault-token/secret/CA material is ever printed, and no slide mutates
+Vault or Kubernetes. The flow is: k8s RBAC (one `system:auth-delegator`
+subject) → token claims decode → direct TokenReview self-review proof →
+Vault mount config (no stored reviewer, no local pod JWT) → least-privilege
+role and policy → positive login proof → negative proofs (wrong audience,
+wrong ServiceAccount — one slide each) → cross-namespace `VaultAuth`
+consumption → app consumption of the synced Secret.
 
 Visual/structural validation of the deck uses the repository-owned
 `scripts/validate-deck-visual.sh` (private tmux socket, optional Kitty
@@ -330,7 +437,7 @@ this is by design -- the target never creates or recreates a cluster. Run
 | Reviewer credential | None (JWKS discovery) | None (`token_reviewer_jwt` explicitly empty) |
 | RBAC | None beyond the JWKS-reader ClusterRole | `system:auth-delegator` on one dedicated ServiceAccount |
 | Auth mount | `auth/jwt-vso` | `auth/kubernetes-vso-self-review` |
-| Namespaces | Single `vso-demo` namespace | Auth namespace (`vso-auth-delegator`) and consumer namespace (`vso-auth-delegator-app`) differ |
+| Namespaces | Single `vso-demo` namespace | Auth namespace (`vso-auth-config`) and consumer namespace (`vso-auth-delegator-app`) differ |
 | `VaultAuth` reference | Same namespace as `VaultStaticSecret` | Cross-namespace `namespace/name` reference via `allowedNamespaces` |
 
 Both scenarios are proven, in the same verifier run, to leave each other
@@ -343,7 +450,7 @@ resources, and none deletes or recreates either kind cluster. To remove
 this scenario only, run these commands **after confirming with the user**:
 
 ```sh
-kubectl --context kind-vso-lab delete namespace vso-auth-delegator vso-auth-delegator-app
+kubectl --context kind-vso-lab delete namespace vso-auth-config vso-auth-delegator-app
 kubectl --context kind-vso-lab delete clusterrolebinding vso-auth-delegator-self-review
 kubectl --context kind-vault-lab exec vault-0 -n default -- vault auth disable kubernetes-vso-self-review
 kubectl --context kind-vault-lab exec vault-0 -n default -- vault policy delete vso-auth-delegator

@@ -178,7 +178,11 @@ VAULT_TOKEN_REVIEWER_SA="${VAULT_TOKEN_REVIEWER_SA:-vault-token-reviewer}"
 # the destination Secret, and the plain app pod -- proving VSO resolves the
 # Kubernetes ServiceAccount from the *consuming* resource's namespace even
 # though the VaultAuth itself is centrally defined elsewhere.
-AUTH_DELEGATOR_AUTH_NAMESPACE="${AUTH_DELEGATOR_AUTH_NAMESPACE:-vso-auth-delegator}"
+# The auth namespace is named vso-auth-config so it can never be confused
+# with the self-review ServiceAccount, which keeps the scenario name
+# vso-auth-delegator (matching the Vault role, policy, KV path, and
+# VaultConnection/VaultAuth it is bound to).
+AUTH_DELEGATOR_AUTH_NAMESPACE="${AUTH_DELEGATOR_AUTH_NAMESPACE:-vso-auth-config}"
 AUTH_DELEGATOR_APP_NAMESPACE="${AUTH_DELEGATOR_APP_NAMESPACE:-vso-auth-delegator-app}"
 
 # ServiceAccounts, both created only in AUTH_DELEGATOR_APP_NAMESPACE. The
